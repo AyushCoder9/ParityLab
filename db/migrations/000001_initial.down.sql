@@ -1,0 +1,9 @@
+BEGIN;
+DROP TABLE IF EXISTS outbox;
+DROP TABLE IF EXISTS idempotency_records;
+DROP TABLE IF EXISTS webhook_events;
+DROP TABLE IF EXISTS run_events;
+DROP TABLE IF EXISTS runs;
+DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS organizations;
+COMMIT;

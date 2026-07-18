@@ -1,0 +1,20 @@
+{
+  "name": "paritylab",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*", "tests/*"],
+  "packageManager": "pnpm@10.13.1",
+  "engines": { "node": ">=24" },
+  "pnpm": {
+    "overrides": {
+      "postcss": "8.5.19"
+    }
+  },
+  "scripts": {
+    "dev": "pnpm --filter @paritylab/web dev",
+    "build": "pnpm --filter @paritylab/web build",
+    "test": "pnpm --filter @paritylab/web test",
+    "lint": "pnpm --filter @paritylab/web lint",
+    "typecheck": "pnpm --filter @paritylab/web typecheck && pnpm --filter @paritylab/e2e typecheck",
+    "e2e": "pnpm --filter @paritylab/e2e test"
+  }
+}

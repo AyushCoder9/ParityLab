@@ -1,0 +1,298 @@
+openapi: 3.1.0
+info:
+  title: ParityLab API
+  version: 0.1.0
+  description: Deterministic, sandbox-only Stripe integration verification.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: Service health
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service, mode]
+                properties:
+                  status: { const: ok }
+                  service: { const: paritylab-api }
+                  mode: { const: sandbox }
+  /v1/overview:
+    get:
+      operationId: getOverview
+      responses:
+        '200':
+          description: Seeded project readiness summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Overview' }
+  /v1/scenarios:
+    get:
+      operationId: listScenarios
+      responses:
+        '200':
+          description: Available deterministic scenarios
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/List'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Scenario' }
+  /v1/runs:
+    post:
+      operationId: createRun
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [scenario_id]
+              properties:
+                scenario_id: { type: string }
+                fault: { $ref: '#/components/schemas/Fault' }
+      responses:
+        '201':
+          description: Completed deterministic run; replay uses the same response and Idempotent-Replayed header.
+          headers:
+            Idempotent-Replayed:
+              schema: { type: string, enum: ['true'] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/runs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    get:
+      operationId: getRun
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/runs/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    get:
+      operationId: getRunEvents
+      description: Returns JSON by default. Accept text/event-stream to replay run.event messages followed by run.complete.
+      responses:
+        '200':
+          description: Event list or Server-Sent Events stream
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/List'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Event' }
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/runs/{id}/report:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    get:
+      operationId: getRunReport
+      responses:
+        '200':
+          description: Deterministic evidence report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '404': { $ref: '#/components/responses/Error' }
+  /hooks/stripe/{endpoint_token}:
+    post:
+      operationId: ingestStripeWebhook
+      description: Verifies Stripe-Signature against the untouched body and rejects livemode events.
+      parameters:
+        - name: endpoint_token
+          in: path
+          required: true
+          schema: { type: string }
+        - name: Stripe-Signature
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Quickly acknowledged, including whether this event identifier was already seen.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [received, duplicate, event]
+                properties:
+                  received: { const: true }
+                  duplicate: { type: boolean }
+                  event:
+                    type: object
+                    required: [id, type]
+                    properties:
+                      id: { type: string }
+                      type: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 255 }
+    RunID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^run_[0-9]{6,}$' }
+  responses:
+    Error:
+      description: Stripe-style API error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  schemas:
+    Fault:
+      type: string
+      enum: [none, duplicate, reorder, timeout, tamper]
+    List:
+      type: object
+      required: [object, data, has_more]
+      properties:
+        object: { const: list }
+        data: { type: array, items: {} }
+        has_more: { const: false }
+    Scenario:
+      type: object
+      required: [id, name, description, category, duration_ms, supported_faults, assertions, difficulty, recommended, estimated_event_count]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        duration_ms: { type: integer, minimum: 0 }
+        supported_faults: { type: array, items: { $ref: '#/components/schemas/Fault' } }
+        assertions: { type: array, items: { type: string } }
+        difficulty: { type: string }
+        recommended: { type: boolean }
+        estimated_event_count: { type: integer, minimum: 1 }
+    Run:
+      type: object
+      required: [id, scenario_id, scenario_name, fault, status, score, started_at, completed_at, duration_ms, event_count, finding_count, recovered, environment, stripe_object_id, merchant_order_id]
+      properties:
+        id: { type: string }
+        scenario_id: { type: string }
+        scenario_name: { type: string }
+        fault: { $ref: '#/components/schemas/Fault' }
+        status: { type: string, enum: [running, passed, failed] }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        duration_ms: { type: integer, minimum: 0 }
+        event_count: { type: integer, minimum: 0 }
+        finding_count: { type: integer, minimum: 0 }
+        recovered: { type: boolean }
+        environment: { const: sandbox }
+        stripe_object_id: { type: string }
+        merchant_order_id: { type: string }
+    Event:
+      type: object
+      required: [id, run_id, sequence, at, source, target, type, title, detail, status, latency_ms, checkpoint, trace_id]
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        sequence: { type: integer, minimum: 1 }
+        at: { type: string, format: date-time }
+        source: { type: string }
+        target: { type: string }
+        type: { type: string }
+        title: { type: string }
+        detail: { type: string }
+        status: { type: string, enum: [healthy, diverged, recovered, blocked] }
+        latency_ms: { type: integer, minimum: 0 }
+        checkpoint: { type: string }
+        trace_id: { type: string }
+        evidence: { type: object, additionalProperties: true }
+        is_duplicate: { type: boolean }
+    Finding:
+      type: object
+      required: [id, severity, title, summary, cause, remediation, checkpoint, resolved]
+      properties:
+        id: { type: string }
+        severity: { type: string, enum: [info, warning, critical] }
+        title: { type: string }
+        summary: { type: string }
+        cause: { type: string }
+        remediation: { type: string }
+        checkpoint: { type: string }
+        resolved: { type: boolean }
+    Report:
+      type: object
+      required: [run, summary, verdict, assertions, findings, state, generated_at]
+      properties:
+        run: { $ref: '#/components/schemas/Run' }
+        summary: { type: string }
+        verdict: { type: string }
+        assertions: { type: array, items: { type: object, additionalProperties: true } }
+        findings: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+        state:
+          type: object
+          required: [stripe, webhook, merchant, balanced]
+          properties:
+            stripe: { type: string }
+            webhook: { type: string }
+            merchant: { type: string }
+            balanced: { type: boolean }
+        generated_at: { type: string, format: date-time }
+    Overview:
+      type: object
+      required: [readiness_score, grade, environment, last_verified_at, stats, categories, recent_runs]
+      properties:
+        readiness_score: { type: integer, minimum: 0, maximum: 100 }
+        grade: { type: string }
+        environment: { const: sandbox }
+        last_verified_at: { type: string, format: date-time }
+        stats: { type: object, additionalProperties: true }
+        categories: { type: array, items: { type: object, additionalProperties: true } }
+        recent_runs: { type: array, items: { $ref: '#/components/schemas/Run' } }
+        critical_finding:
+          oneOf:
+            - $ref: '#/components/schemas/Finding'
+            - type: 'null'
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [type, code, message, request_id]
+          properties:
+            type: { type: string }
+            code: { type: string }
+            message: { type: string }
+            param: { type: string }
+            request_id: { type: string }

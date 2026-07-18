@@ -1,0 +1,19 @@
+{
+  "id": "com.paritylab.verification",
+  "version": "0.1.0",
+  "name": "ParityLab",
+  "distribution_type": "private",
+  "stripe_api_access_type": "oauth",
+  "permissions": [
+    { "permission": "payment_intent_read", "purpose": "Verify sandbox payment state against integration behavior." },
+    { "permission": "event_read", "purpose": "Correlate sandbox events with deterministic verification runs." }
+  ],
+  "ui_extension": {
+    "views": [
+      {
+        "viewport": "stripe.dashboard.drawer.default",
+        "component": "overview"
+      }
+    ]
+  }
+}

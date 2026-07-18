@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: ParityLab
+    orgId: 1
+    folder: ParityLab
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

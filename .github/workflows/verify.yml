@@ -1,0 +1,138 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Validate infrastructure and workflows
+        run: tests/scripts/verify-config.sh
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit tests
+        run: |
+          pnpm test
+          go test -race ./...
+      - name: Production builds
+        run: |
+          pnpm build
+          go build ./services/api/cmd/paritylab
+
+  browser:
+    name: Browser (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Install application dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install browser test dependencies
+        working-directory: tests/e2e
+        run: pnpm install --frozen-lockfile
+      - name: Install browser
+        working-directory: tests/e2e
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+      - name: Run Playwright
+        working-directory: tests/e2e
+        run: pnpm exec playwright test --project=${{ matrix.browser }}
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.browser }}
+          path: tests/e2e/artifacts
+          if-no-files-found: ignore
+          retention-days: 14
+
+  contract:
+    name: API contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Start API
+        run: |
+          go run ./services/api/cmd/paritylab >api.log 2>&1 &
+          echo $! >api.pid
+      - name: Await API
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat api.log
+          exit 1
+      - name: Run API and webhook contracts
+        env:
+          PARITYLAB_CONTRACT_API_URL: http://127.0.0.1:8080
+        run: |
+          go test ./tests/contracts -count=1
+          tests/scripts/smoke-api.sh
+      - name: Show API log on failure
+        if: failure()
+        run: cat api.log
+
+  compose:
+    name: Compose validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate rendered Compose model
+        run: docker compose -f infra/compose.yaml config --quiet
+      - name: Start dependency stack
+        run: docker compose -f infra/compose.yaml up -d --wait
+      - name: Capture state
+        if: always()
+        run: docker compose -f infra/compose.yaml ps
+      - name: Stop dependency stack
+        if: always()
+        run: docker compose -f infra/compose.yaml down --volumes --remove-orphans

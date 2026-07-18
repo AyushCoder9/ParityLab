@@ -41,12 +41,16 @@ See `docs/VERIFICATION.md` for the complete command ledger and repair history.
 - k6 scripts exist but k6 load tests were not executed locally.
 - The full dependency Compose stack was configuration-validated, not booted through two destructive fresh-volume cycles on this shared Docker host.
 
-## Last green commit
+## Last green implementation commit
 
-Pending final commit.
+`15555b2` — `feat: build ParityLab reliability verification platform`
 
-## Next actions
+## Desktop mirror
 
-1. Commit the verified repository.
-2. Mirror the repository to `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`.
-3. Record the commit SHA and Desktop mirror result here.
+Verified clean at `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`. The mirror contained branch `main` at `15555b2`; it is refreshed again after this handoff record is committed.
+
+## Next optional expansions
+
+1. Provide Stripe test credentials and run the real Sandbox adapter path.
+2. Wire the PostgreSQL/outbox runtime adapter and execute the two fresh-volume Compose cycles.
+3. Run WebKit and k6 locally, or allow the configured CI matrix to provide that evidence.

@@ -43,11 +43,11 @@ See `docs/VERIFICATION.md` for the complete command ledger and repair history.
 
 ## Last green implementation commit
 
-`15555b2` — `feat: build ParityLab reliability verification platform`
+`16e2b72` — `fix: turn hero whitespace into verification rail`
 
 ## Desktop mirror
 
-Verified clean at `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`. The mirror contained branch `main` at `15555b2`; it is refreshed again after this handoff record is committed.
+Verified clean at `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`. The mirror is refreshed after each green handoff commit.
 
 ## Next optional expansions
 

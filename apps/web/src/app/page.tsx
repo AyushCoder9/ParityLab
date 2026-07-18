@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Icon, StatusPill } from "@paritylab/ui";
-import { ArchitectureFlow, FaultInjector, HeroSignal } from "@/components/marketing";
+import { ArchitectureFlow, FaultInjector, HeroSignal, HeroVerificationRail } from "@/components/marketing";
 import { SiteHeader } from "@/components/site-header";
 
 export default function HomePage() {
@@ -19,10 +19,7 @@ export default function HomePage() {
             </div>
           </div>
           <div className="hero-aside">
-            <div className="hero-proof">
-              <span className="mono">VERIFICATION SURFACE</span>
-              <p>Six systems. One observable truth.</p>
-            </div>
+            <HeroVerificationRail />
           </div>
         </div>
         <HeroSignal />

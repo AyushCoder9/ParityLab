@@ -5,6 +5,48 @@ import { useEffect, useState } from "react";
 import { Icon, StatusPill } from "@paritylab/ui";
 import { EventBraid } from "./event-braid";
 
+const verificationSystems = [
+  ["Browser", "Checkout submitted"],
+  ["API", "Intent idempotent"],
+  ["Stripe", "Payment confirmed"],
+  ["Webhook", "Signature verified"],
+  ["Worker", "Effect deduplicated"],
+  ["Database", "State converged"],
+] as const;
+
+export function HeroVerificationRail() {
+  const [active, setActive] = useState(5);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    setActive(0);
+    const timer = window.setInterval(() => setActive((current) => (current + 1) % verificationSystems.length), 1100);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <aside className="hero-verification" aria-label="Live verification path through six systems">
+      <div className="hero-proof">
+        <span className="mono">VERIFICATION SURFACE</span>
+        <p>Six systems. One observable truth.</p>
+      </div>
+      <ol className="verification-rail">
+        {verificationSystems.map(([system, event], index) => (
+          <li key={system} className={index === active ? "is-active" : index < active || active === verificationSystems.length - 1 ? "is-verified" : ""} aria-current={index === active ? "step" : undefined}>
+            <span className="mono">{String(index + 1).padStart(2, "0")}</span>
+            <span><strong>{system}</strong><small>{event}</small></span>
+            <i aria-hidden="true" />
+          </li>
+        ))}
+      </ol>
+      <div className="verification-result">
+        <span className="mono">BUSINESS EFFECTS</span>
+        <strong><span aria-hidden="true">✓</span> Exactly one</strong>
+      </div>
+    </aside>
+  );
+}
+
 export function HeroSignal() {
   const [mode, setMode] = useState<"healthy" | "fault" | "verified">("healthy");
 

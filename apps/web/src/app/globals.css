@@ -131,7 +131,7 @@
   .marketing-page { overflow: clip; }
   .hero-section { min-height: 100svh; position: relative; background: var(--canvas); display: flex; flex-direction: column; }
   .hero-section::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(to right, transparent 49.9%, color-mix(in oklch, var(--line) 48%, transparent) 50%, transparent 50.1%); pointer-events: none; }
-  .hero-grid { width: min(100% - 4rem, 1360px); margin: auto; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(14rem, .7fr); align-items: end; gap: 3rem; padding: clamp(4rem, 10vh, 7.5rem) 0 2rem; }
+  .hero-grid { width: min(100% - 4rem, 1360px); margin: auto; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(18rem, .7fr); align-items: stretch; gap: clamp(3rem, 6vw, 6rem); padding: clamp(4rem, 10vh, 7.5rem) 0 2rem; }
   .hero-kicker { display: flex; align-items: center; gap: .7rem; color: var(--primary); font-size: .78rem; font-weight: 650; margin-bottom: 1.25rem; }
   .hero-kicker span { width: 1.2rem; height: 1px; background: currentColor; }
   .hero-copy h1 { max-width: 12ch; font-size: clamp(3.7rem, 7.7vw, 6rem); letter-spacing: -.04em; }
@@ -139,10 +139,24 @@
   .hero-lede { max-width: 38rem; margin-top: 1.8rem; color: var(--muted); font-size: clamp(1rem, 1.35vw, 1.18rem); line-height: 1.65; }
   .hero-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2rem; }
   .hero-actions .cta { padding-inline: 1.15rem; }
-  .hero-aside { display: flex; justify-content: flex-end; padding-bottom: .35rem; }
-  .hero-proof { width: 13rem; border-top: 1px solid var(--ink); padding-top: .8rem; }
+  .hero-aside { display: flex; justify-content: flex-end; align-items: center; padding: 1rem 0 0; }
+  .hero-verification { width: min(100%, 22rem); display: flex; flex-direction: column; justify-content: center; }
+  .hero-proof { width: 100%; border-top: 1px solid var(--ink); padding-top: .8rem; }
   .hero-proof span { font-size: .62rem; color: var(--muted); }
-  .hero-proof p { font-size: 1.08rem; line-height: 1.25; margin-top: .55rem; }
+  .hero-proof p { max-width: 14rem; font-size: 1.08rem; line-height: 1.25; margin-top: .55rem; }
+  .verification-rail { list-style: none; margin: 2rem 0 0; padding: 0; border-top: 1px solid var(--line); }
+  .verification-rail li { min-height: 3.6rem; display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: .75rem; border-bottom: 1px solid var(--line); color: var(--muted); transition: color 220ms var(--ease-state), background-color 220ms var(--ease-state); }
+  .verification-rail li > .mono { font-size: .58rem; }
+  .verification-rail li > span:nth-child(2) { display: grid; gap: .08rem; }
+  .verification-rail strong { color: var(--ink); font-size: .8rem; font-weight: 610; }
+  .verification-rail small { font-size: .68rem; }
+  .verification-rail i { width: .48rem; height: .48rem; margin-right: .3rem; border: 1px solid var(--line); border-radius: 50%; transition: border-color 220ms ease, background-color 220ms ease, box-shadow 220ms ease; }
+  .verification-rail li.is-active { color: var(--primary); background: var(--surface); }
+  .verification-rail li.is-active i { border-color: var(--primary); background: var(--primary); box-shadow: 0 0 0 4px color-mix(in oklch, var(--primary) 12%, transparent); }
+  .verification-rail li.is-verified i { border-color: var(--verified); background: var(--verified); }
+  .verification-result { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-top: .9rem; }
+  .verification-result > span { color: var(--muted); font-size: .58rem; }
+  .verification-result strong { display: flex; align-items: center; gap: .35rem; color: var(--primary); font-size: .78rem; }
   .hero-signal { width: min(100% - 4rem, 1360px); margin: 1.5rem auto 0; border-top: 1px solid var(--line); padding-top: .8rem; animation: signalEnter 900ms .15s var(--ease-out) both; }
   .hero-signal__topline { display: flex; justify-content: space-between; align-items: center; }
   .hero-signal__topline .mono { font-size: .66rem; color: var(--muted); }

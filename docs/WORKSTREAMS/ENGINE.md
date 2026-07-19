@@ -1,24 +1,118 @@
 # Engine workstream
 
-Status: complete for the local v1
+Status: Phase 1 persistence, the credential-gated Phase 2 Stripe Sandbox PaymentIntent slice, and the smallest green Phase 3 durable worker/reference-merchant slice are implemented.
 
 ## Delivered
 
-- Deterministic five-scenario and three-seeded-run engine.
-- Overview, scenario list, idempotent run creation/detail, JSON/SSE event timeline, evidence report, and webhook ingress.
-- Stripe-shaped error envelope with request IDs.
-- Exact replay and conflict behavior for `Idempotency-Key`.
-- Raw-body HMAC verification, five-minute tolerance, constant-time comparison, livemode rejection, response redaction, and concurrent-safe event-ID deduplication.
-- PostgreSQL 18 schema for projects, connections, targets, runs, events, findings, audit records, idempotency records, and outbox.
-- Shared TypeScript and OpenAPI contracts.
+- Hexagonal `engine.Repository` persistence port with a credential-free, concurrency-safe in-memory adapter and a PostgreSQL 18 adapter backed by `pgx`.
+- `DATABASE_URL` composition: unset uses the deterministic memory adapter; set connects, pings, applies checksum-locked migrations, and fails startup before listening if persistence is not ready.
+- Atomic PostgreSQL run creation: run, ordered events, immutable report snapshot/hash, hashed idempotency record, and redacted transactional outbox message commit together.
+- Durable reads for run detail, run list, event evidence, reports, overview values, idempotent replay, and webhook deduplication.
+- `GET /v1/runs` list envelope for the live product UI; existing endpoints and deterministic seeded behavior remain compatible.
+- Webhook ledger stores only event/type and SHA-256 body/endpoint hashes. The same event ID with changed signed content is rejected instead of being silently treated as a duplicate.
+- Stable seeded IDs (`run_000001` through `run_000003`) and a database sequence floor ensure real/user-created runs start at `run_000004` without reseeding on restart.
+- Reversible migrations for full run/event snapshots, immutable reports, users/memberships, encrypted Stripe connection and target secret columns, scenario configurations, worker leases, assertions, findings, notifications, audit records, and outbox claim metadata.
+- Sandbox startup validation rejects `sk_live_`, `rk_live_`, and `pk_live_`; webhook ingress still rejects `livemode: true` before persistence.
+- Graceful SIGINT/SIGTERM HTTP shutdown and repository pool close, with database credentials excluded from logs.
 
-## Verification
+## Persistence and migration invariants
 
-- `go test ./...` in `golang:1.26-alpine` — pass.
-- `go vet ./... && go build ./...` in the same pinned image — exit 0.
-- Live contract against the running service — signed duplicate delivery and invalid signature cases pass.
-- Browser API and idempotency contracts — pass in desktop and mobile Chromium.
+- Migration files remain explicitly wrapped in `BEGIN`/`COMMIT`; the migrator validates and strips those wrappers, then executes the body and checksum record in one pgx transaction under a session advisory lock.
+- An already-applied migration whose bytes change is rejected by checksum rather than reapplied.
+- Idempotency keys are stored only as SHA-256 hashes. Request bodies are stored only as SHA-256 hashes; replay responses contain the already-public run representation.
+- Monetary scenarios describe and compare integer minor units plus ISO currency. No floating-point money fields were introduced.
+- PostgreSQL outbox payloads contain only run ID, scenario ID, status, and the fixed sandbox environment—never keys, webhook bodies, or personal data.
 
-## Deferred production adapter
+## Verification evidence
 
-The v1 uses the in-memory deterministic adapter. Wiring PostgreSQL persistence and the outbox publisher is the next backend expansion; the schema and infrastructure are already present.
+- `docker run ... golang:1.26-alpine go test ./...` — passed after adding `pgx/v5` and formatting the backend.
+- Live PostgreSQL 18 restart contract on host port `55432` — passed: API logged `persistence=postgres`; `run_000004` survived an API restart; the same idempotency key replayed the same run and returned `Idempotent-Replayed: true`; webhook `evt_root_restart` changed from `duplicate:false` before restart to `duplicate:true` after restart.
+- Existing signed webhook, invalid-signature, CORS, Stripe-shaped errors, deterministic scenarios, and SSE unit contracts remain in `services/api/internal/httpapi` and `services/api/internal/engine`.
+- Environment-gated adapter test: `TEST_DATABASE_URL=... go test ./services/api/internal/postgres -run TestRepositoryPersistsAcrossRestart -count=1 -v` exercises persisted run/events/report, replay, and webhook dedup across two repository instances.
+
+## Runtime contract
+
+```bash
+DATABASE_URL='postgres://.../paritylab?sslmode=disable' \
+PARITYLAB_MIGRATIONS_DIR='db/migrations' \
+go run ./services/api/cmd/paritylab
+```
+
+The process does not listen until PostgreSQL is reachable and every migration is verified/applied. Therefore `GET /healthz` returning 200 after startup is the current readiness signal. If `DATABASE_URL` is omitted, ParityLab intentionally runs the deterministic in-memory demo.
+
+## Deferred after Phase 1
+
+- Webhook domain processing beyond its durable ingress job remains a later Phase 3 expansion.
+- The outbox is transactionally populated but no publisher/lease loop runs yet.
+- Authentication and tenant authorization are not wired to the new schema yet.
+- Long-lived database-backed SSE with `Last-Event-ID` is not part of this slice; the route continues to stream the persisted finite timeline.
+
+## Phase 2 Stripe Sandbox vertical slice
+
+### Delivered
+
+- Official `github.com/stripe/stripe-go/v86` SDK at `v86.1.1`, using the current `stripe.Client` service API rather than the deprecated global client pattern.
+- `POST /v1/connections/stripe/validate` validates `sk_test_` or `rk_test_` server-side through `GET /v1/account`, encrypts the key with AES-256-GCM, and returns only `{id,stripe_account_id,sandbox_name,status,created_at}`.
+- PostgreSQL and memory connection stores. PostgreSQL persists only authenticated ciphertext plus a key-version marker; plaintext keys are never returned or logged.
+- `POST /v1/stripe/payment-intents` requires `Idempotency-Key` and accepts `{connection_id,amount_minor,currency}`. Amount is an integer minor-unit value and currency must be a lowercase three-letter code.
+- The PaymentIntent request carries stable non-sensitive `paritylab_correlation_id` and `paritylab_scenario_id` metadata. The external Stripe idempotency key is a SHA-256-derived stable token, never the raw client key.
+- A successful Stripe response is graded through the duplicate-delivery invariant and atomically persisted as the same run/events/report/outbox representation used by the rest of ParityLab. The report includes the real `pi_` identifier and an exact minor-unit assertion.
+- Repository idempotency preflight returns completed replays before decryption or network I/O and rejects changed request parameters locally. Concurrent misses still reach Stripe with byte-equivalent parameters and the same Stripe idempotency key, then converge through the repository transaction.
+- `PARITYLAB_ENCRYPTION_KEY` must be a base64-encoded 32-byte key. Missing encryption configuration returns a safe 503; it never panics or falls back to plaintext storage.
+- `STRIPE_API_BASE` is accepted only when `PARITYLAB_ALLOW_STRIPE_MOCK=true`; otherwise startup rejects the override. This exists for deterministic black-box tests and is not enabled by default.
+
+### Exact verification
+
+- `docker run --rm ... golang:1.26-alpine sh -c 'gofmt -w services/api && go test ./services/api/...'` — exit 0; `cmd/paritylab`, `engine`, `httpapi`, `postgres`, `secrets`, and `stripeadapter` passed.
+- `docker run --rm ... golang:1.26-alpine sh -c 'go vet ./services/api/... && go build ./services/api/...'` — exit 0.
+- Official SDK adapter tests use `httptest.Server` and assert authorization, `/v1/account`, form-encoded integer amount/currency, correlation metadata, and Stripe idempotency headers without external credentials.
+- Engine tests prove exact replay returns the original persisted run without a second gateway call, changed parameters return a local 409 without reaching Stripe, the report stores the `pi_` evidence, and missing encryption configuration returns 503.
+- HTTP tests prove both public endpoints, response redaction, direct persisted Run response, and `Idempotent-Replayed: true` behavior.
+
+### Still credential-gated or deferred
+
+- No real Stripe request was executed because no Sandbox secret/restricted key was provided. The adapter is production code, while CI/local tests use deterministic HTTP mocks.
+- This slice creates an unconfirmed Sandbox PaymentIntent and persists the duplicate-delivery evidence model. A real signed Stripe webhook is still accepted by the durable ingress, but end-to-end correlation from that delivery into an asynchronous worker is Phase 3.
+- Authentication/tenant selection is not available yet. Connections are attached to the documented local default sandbox project until identity and workspace APIs land.
+- Encryption supports version metadata but automated key rotation/re-encryption is deferred.
+
+## Phase 3 durable worker and reference merchant
+
+### Delivered
+
+- Separate production worker entrypoint at `services/api/cmd/worker`. It requires `DATABASE_URL` and a minimum-16-byte `PARITYLAB_SIGNING_SECRET`, applies migrations, runs until SIGINT/SIGTERM, and closes PostgreSQL cleanly.
+- PostgreSQL outbox claims use `FOR UPDATE SKIP LOCKED`, due-time ordering, named owners, attempt counters, expiring leases, heartbeat renewal, exponential retry scheduling, terminal failure timestamps, and safe error codes rather than exception text.
+- Memory repository implements the same outbox contract for credential-free deterministic tests, including expired-lease recovery.
+- Stripe-backed PaymentIntent runs enqueue `verification.run.queued` in the same transaction as the run, events, report, and idempotency response.
+- First-seen signed Stripe webhooks now atomically persist the hashed receipt and enqueue one `stripe.webhook.received` outbox record before acknowledging. Duplicate deliveries return the existing duplicate response and enqueue nothing.
+- Versioned `paritylab.verification.v1` request contract with HMAC-SHA256 authentication and controlled `none`, `duplicate`, `reorder`, `timeout`, and `tamper` relay behavior.
+- Bundled reference merchant verifies the version/signature and applies effects through a durable `reference_merchant_effects` table. Effect idempotency and monotonic sequence state therefore survive worker restarts.
+- The smallest completed worker vertical slice is: persisted Stripe run → outbox claim → duplicate delivery through the signed relay → exactly one durable reference-merchant effect → idempotent assertion appended to the persisted report and normalized assertions table → outbox completion.
+- Migrations `000004_outbox_leases` and `000005_reference_merchant` are reversible and add the terminal-failure/claim index plus durable merchant effect state.
+
+### Runtime
+
+```bash
+DATABASE_URL='postgres://.../paritylab?sslmode=disable' \
+PARITYLAB_MIGRATIONS_DIR='db/migrations' \
+PARITYLAB_SIGNING_SECRET='minimum-16-byte-secret' \
+go run ./services/api/cmd/worker
+```
+
+The API and worker are intentionally separate processes. The API remains latency-focused and only commits webhook/run jobs; the worker owns relay execution and report enrichment.
+
+### Verification
+
+- `go test ./services/api/...` passes the API, worker command build, repositories, verification fault relay, durable reference merchant, and worker packages.
+- Unit tests prove all five controlled fault modes; tampering produces zero effects, and duplicate/reorder produce one effect with duplicate evidence.
+- Worker tests prove a queued Stripe run is claimed, processed, and receives `assert_reference_merchant_exactly_once`; expired leases are reclaimed by a different owner with an incremented attempt.
+- Webhook tests prove first delivery enqueues exactly one `stripe.webhook.received` message while exact replay enqueues none.
+- Environment-gated PostgreSQL worker integration is available through `TEST_DATABASE_URL`: it migrates, creates a Stripe-shaped queued run without external credentials, executes the worker, and reads the durable assertion from the report.
+
+### Remaining Phase 3 gaps
+
+- `stripe.webhook.received` is durably queued and safely acknowledged at HTTP ingress, but its domain processor/correlation into an active run is not implemented yet. The verification worker filters claims to `verification.run.queued`, so webhook and unknown topics remain pending for their future dedicated consumer and are never falsely marked published.
+- The reference merchant is a bundled contract adapter backed by ParityLab PostgreSQL, not yet a separately deployable example merchant HTTP service.
+- Only duplicate relay execution is wired into queued Stripe runs. Reorder, timeout, and tamper are implemented/tested at the versioned relay layer but are not yet selectable through persisted scenario configuration.
+- Report enrichment is idempotent but mutates the preliminary report snapshot. A later state-machine slice must keep runs `running` until grading and emit the immutable final report only once.
+- Worker metrics, OpenTelemetry spans, administrative dead-letter replay, and per-project concurrency/rate limits remain to be added.

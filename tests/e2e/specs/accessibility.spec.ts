@@ -1,7 +1,21 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
-const routes = ["/", "/demo", "/dashboard"];
+const routes = [
+  "/",
+  "/demo",
+  "/login",
+  "/onboarding",
+  "/dashboard",
+  "/scenarios",
+  "/runs",
+  "/findings",
+  "/reports",
+  "/connections",
+  "/environments",
+  "/notifications",
+  "/settings",
+];
 
 for (const route of routes) {
   test(`${route} has no serious accessibility violations`, async ({ page }) => {
@@ -34,4 +48,13 @@ test("principal navigation is keyboard reachable", async ({ page }) => {
   await page.keyboard.press("Tab");
   const isMobile = (page.viewportSize()?.width ?? 1280) <= 760;
   await expect(page.getByRole("link", { name: isMobile ? "Open console" : "System" })).toBeFocused();
+});
+
+test("product routes fit a narrow viewport without horizontal overflow", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const route of routes.filter((path) => !["/", "/demo"].includes(path))) {
+    await page.goto(route);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, `${route} overflows the mobile viewport`).toBeLessThanOrEqual(1);
+  }
 });

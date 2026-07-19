@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/domain"
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/engine"
 )
 
 type stripeEnvelope struct {
@@ -49,11 +51,19 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, domain.Invalid("live_mode_rejected", "ParityLab v1 accepts Stripe sandbox events only.", "livemode"))
 		return
 	}
-	duplicate := h.engine.MarkWebhookSeen(event.ID)
+	duplicate, err := h.engine.RecordWebhook(event.ID, event.Type, r.PathValue("endpoint_token"), body)
+	if err != nil {
+		if errors.Is(err, engine.ErrWebhookConflict) {
+			h.writeError(w, r, domain.Invalid("webhook_event_conflict", "This Stripe event ID was already received with different signed content.", "id"))
+			return
+		}
+		h.writeError(w, r, domain.Internal("webhook_persistence_failed", "The verified webhook could not be durably recorded."))
+		return
+	}
 	h.writeJSON(w, http.StatusOK, map[string]any{
-		"received": true,
+		"received":  true,
 		"duplicate": duplicate,
-		"event": map[string]string{"id": event.ID, "type": event.Type},
+		"event":     map[string]string{"id": event.ID, "type": event.Type},
 	})
 }
 

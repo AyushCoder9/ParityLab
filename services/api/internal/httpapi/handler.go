@@ -22,6 +22,7 @@ type Config struct {
 	EndpointToken   string
 	SignatureMaxAge time.Duration
 	Now             func() time.Time
+	Stripe          *engine.StripeService
 }
 
 type Handler struct {
@@ -50,11 +51,84 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("GET /healthz", h.health)
 	h.mux.HandleFunc("GET /v1/overview", h.overview)
 	h.mux.HandleFunc("GET /v1/scenarios", h.scenarios)
+	h.mux.HandleFunc("GET /v1/runs", h.runs)
 	h.mux.HandleFunc("POST /v1/runs", h.createRun)
+	h.mux.HandleFunc("POST /v1/stripe/payment-intents", h.createStripePaymentIntentRun)
+	h.mux.HandleFunc("POST /v1/connections/stripe/validate", h.validateStripeConnection)
 	h.mux.HandleFunc("GET /v1/runs/{id}", h.run)
 	h.mux.HandleFunc("GET /v1/runs/{id}/events", h.events)
 	h.mux.HandleFunc("GET /v1/runs/{id}/report", h.report)
 	h.mux.HandleFunc("POST /hooks/stripe/{endpoint_token}", h.webhook)
+}
+
+type validateStripeConnectionRequest struct {
+	SecretKey   string `json:"secret_key"`
+	SandboxName string `json:"sandbox_name"`
+}
+
+func (h *Handler) validateStripeConnection(w http.ResponseWriter, r *http.Request) {
+	var input validateStripeConnectionRequest
+	body, ok := h.decodeJSONBody(w, r, &input)
+	if !ok {
+		return
+	}
+	clear(body)
+	connection, apiErr := h.config.Stripe.ValidateConnection(r.Context(), input.SecretKey, input.SandboxName)
+	input.SecretKey = ""
+	if apiErr != nil {
+		h.writeError(w, r, apiErr)
+		return
+	}
+	h.writeJSON(w, http.StatusCreated, connection)
+}
+
+type createStripePaymentIntentRunRequest struct {
+	ConnectionID string `json:"connection_id"`
+	AmountMinor  int64  `json:"amount_minor"`
+	Currency     string `json:"currency"`
+}
+
+func (h *Handler) createStripePaymentIntentRun(w http.ResponseWriter, r *http.Request) {
+	var input createStripePaymentIntentRunRequest
+	body, ok := h.decodeJSONBody(w, r, &input)
+	if !ok {
+		return
+	}
+	if input.ConnectionID == "" {
+		h.writeError(w, r, domain.Invalid("parameter_missing", "The connection_id parameter is required.", "connection_id"))
+		return
+	}
+	run, replayed, apiErr := h.config.Stripe.CreatePaymentIntentRun(
+		r.Context(), input.ConnectionID, input.AmountMinor, input.Currency,
+		r.Header.Get("Idempotency-Key"), body,
+	)
+	if apiErr != nil {
+		h.writeError(w, r, apiErr)
+		return
+	}
+	if replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	h.writeJSON(w, http.StatusCreated, run)
+}
+
+func (h *Handler) decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err != nil {
+		h.writeError(w, r, domain.Invalid("request_too_large", "The request body exceeds 1 MiB.", ""))
+		return nil, false
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		h.writeError(w, r, domain.Invalid("invalid_json", "The request body must be a valid JSON object with only supported fields.", ""))
+		return nil, false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		h.writeError(w, r, domain.Invalid("invalid_json", "The request body must contain exactly one JSON object.", ""))
+		return nil, false
+	}
+	return body, true
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +161,10 @@ func (h *Handler) overview(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) scenarios(w http.ResponseWriter, _ *http.Request) {
 	items := h.engine.Scenarios()
 	h.writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": items, "has_more": false})
+}
+
+func (h *Handler) runs(w http.ResponseWriter, _ *http.Request) {
+	h.writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": h.engine.Runs(), "has_more": false})
 }
 
 type createRunRequest struct {

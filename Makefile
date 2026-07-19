@@ -3,6 +3,7 @@
 dev:
 	@echo "Web: pnpm dev"
 	@echo "API: go run ./services/api/cmd/paritylab"
+	@echo "Worker: go run ./services/api/cmd/worker"
 
 test:
 	pnpm test
@@ -10,7 +11,7 @@ test:
 
 build:
 	pnpm build
-	go build ./services/api/cmd/paritylab
+	go build ./services/api/cmd/...
 
 verify:
 	pnpm lint
@@ -18,7 +19,7 @@ verify:
 	pnpm test
 	go test ./...
 	pnpm build
-	go build ./services/api/cmd/paritylab
+	go build ./services/api/cmd/...
 
 e2e:
 	pnpm e2e

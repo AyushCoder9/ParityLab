@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon, StatusPill } from "@paritylab/ui";
 import { EventBraid } from "./event-braid";
 
@@ -62,7 +62,7 @@ export function HeroSignal() {
     <div className="hero-signal">
       <div className="hero-signal__topline">
         <StatusPill tone={mode === "fault" ? "fault" : "verified"}>{mode === "healthy" ? "Payment in motion" : mode === "fault" ? "Duplicate observed" : "State converged"}</StatusPill>
-        <span className="mono">RUN_01J8Z4</span>
+        <span className="mono">SEED_TRACE_01J8Z4</span>
       </div>
       <EventBraid mode={mode} />
       <div className="hero-signal__readout" aria-live="polite">
@@ -70,6 +70,67 @@ export function HeroSignal() {
       </div>
     </div>
   );
+}
+
+export function MarketingMotion() {
+  useEffect(() => {
+    const root = document.querySelector<HTMLElement>(".marketing-page");
+    if (!root) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    root.classList.add("motion-ready");
+    const reveals = Array.from(root.querySelectorAll<HTMLElement>("[data-reveal]"));
+    const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        (entry.target as HTMLElement).classList.add("is-visible");
+        observer.unobserve(entry.target);
+      }
+    }), { threshold: .16, rootMargin: "0px 0px -8%" });
+    reveals.forEach((item) => observer.observe(item));
+    return () => { observer.disconnect(); root.classList.remove("motion-ready"); };
+  }, []);
+  return null;
+}
+
+const forensicChapters = [
+  ["01", "A customer confirms payment.", "The browser sends one intent with a stable idempotency key."],
+  ["02", "Reality delivers it twice.", "The same signed event crosses ingress again. The ledger recognizes its Stripe event ID."],
+  ["03", "The side effect stays singular.", "The worker suppresses duplicate fulfillment and hydrates the current Stripe object."],
+  ["04", "Evidence closes the loop.", "Stripe state, webhook state, and merchant state agree in the persisted report."],
+] as const;
+
+export function ForensicNarrative() {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [active, setActive] = useState(0);
+  const [progress, setProgress] = useState(.08);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setActive(3); setProgress(1); return; }
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const section = sectionRef.current;
+      if (!section) return;
+      const rect = section.getBoundingClientRect();
+      const distance = Math.max(1, rect.height - window.innerHeight);
+      const value = Math.max(0, Math.min(1, -rect.top / distance));
+      setProgress(Math.max(.04, value));
+      setActive(Math.min(3, Math.floor(value * 4)));
+    };
+    const requestUpdate = () => { if (!frame) frame = window.requestAnimationFrame(update); };
+    update();
+    window.addEventListener("scroll", requestUpdate, { passive: true });
+    window.addEventListener("resize", requestUpdate);
+    return () => { window.removeEventListener("scroll", requestUpdate); window.removeEventListener("resize", requestUpdate); if (frame) window.cancelAnimationFrame(frame); };
+  }, []);
+
+  return <section className="forensic-narrative" ref={sectionRef} aria-label="How a verification run converges">
+    <div className="forensic-sticky">
+      <div className="forensic-heading"><span className="mono">ONE RUN · FOUR PROOFS</span><h2>Watch correctness emerge from disorder.</h2></div>
+      <div className="forensic-canvas"><EventBraid mode={active === 1 ? "fault" : active >= 2 ? "verified" : "healthy"} progress={progress} /><div className="forensic-progress"><span style={{ transform: `scaleX(${progress})` }} /></div></div>
+    </div>
+    <ol className="forensic-chapters">{forensicChapters.map(([index, title, detail], chapter) => <li key={index} className={active === chapter ? "is-active" : chapter < active ? "is-passed" : ""}><span className="mono">{index}</span><div><h3>{title}</h3><p>{detail}</p></div></li>)}</ol>
+  </section>;
 }
 
 export function FaultInjector() {

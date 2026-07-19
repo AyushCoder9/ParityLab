@@ -57,6 +57,13 @@ test.describe("public API contract", () => {
     const report = await request.get(`${apiURL}/v1/runs/${run.id}/report`);
     expect(report.ok()).toBeTruthy();
     expect(await report.json()).toMatchObject({ run: { id: run.id }, assertions: expect.any(Array) });
+
+    const ledger = await request.get(`${apiURL}/v1/runs`);
+    expect(ledger.ok(), "the live Runs screen requires a list endpoint").toBeTruthy();
+    expect(await ledger.json()).toMatchObject({
+      object: "list",
+      data: expect.arrayContaining([expect.objectContaining({ id: run.id, environment: "sandbox" })]),
+    });
   });
 
   test("mutations require an idempotency key", async ({ request }) => {

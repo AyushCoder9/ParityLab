@@ -1,43 +1,122 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/engine"
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/httpapi"
+	postgresadapter "github.com/ayushkumarsingh/paritylab/services/api/internal/postgres"
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/secrets"
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/stripeadapter"
 )
 
 func main() {
-	address := envOr("API_ADDRESS", ":8080")
-	secret := envOr("STRIPE_WEBHOOK_SECRET", "whsec_paritylab_demo")
-	if strings.HasPrefix(os.Getenv("STRIPE_SECRET_KEY"), "sk_live_") {
-		slog.Error("refusing to start with a live Stripe key")
+	if err := run(); err != nil {
+		slog.Error("ParityLab API stopped", "error", err)
 		os.Exit(1)
 	}
+}
 
-	handler := httpapi.New(engine.NewService(), httpapi.Config{
+func run() error {
+	if err := validateSandboxKey(os.Getenv("STRIPE_SECRET_KEY")); err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var repository engine.Repository = engine.NewMemoryRepository()
+	persistence := "memory"
+	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
+		opened, err := postgresadapter.Open(ctx, databaseURL, envOr("PARITYLAB_MIGRATIONS_DIR", "db/migrations"))
+		if err != nil {
+			return err
+		}
+		repository = opened
+		persistence = "postgres"
+	}
+	service, err := engine.NewServiceWithRepository(repository)
+	if err != nil {
+		_ = repository.Close()
+		return err
+	}
+	defer func() {
+		if err := service.Close(); err != nil {
+			slog.Warn("repository close failed", "error", err)
+		}
+	}()
+	var secretCipher *secrets.Cipher
+	if encryptionKey := os.Getenv("PARITYLAB_ENCRYPTION_KEY"); encryptionKey != "" {
+		secretCipher, err = secrets.New(encryptionKey)
+		if err != nil {
+			return err
+		}
+	}
+	stripeBase, err := configuredStripeAPIBase()
+	if err != nil {
+		return err
+	}
+	stripeService := engine.NewStripeService(repository, stripeadapter.New(stripeBase, nil), secretCipher)
+
+	handler := httpapi.New(service, httpapi.Config{
 		WebOrigin:     envOr("WEB_ORIGIN", "http://127.0.0.1:3000"),
-		WebhookSecret: secret,
+		WebhookSecret: envOr("STRIPE_WEBHOOK_SECRET", "whsec_paritylab_demo"),
 		EndpointToken: envOr("STRIPE_ENDPOINT_TOKEN", "demo"),
+		Stripe:        stripeService,
 	})
 	server := &http.Server{
-		Addr:              address,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		Addr: envOr("API_ADDRESS", ":8080"), Handler: handler,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
+		WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
-	slog.Info("ParityLab API listening", "address", address, "mode", "sandbox")
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("API server stopped", "error", err)
-		os.Exit(1)
+	serveError := make(chan error, 1)
+	go func() {
+		slog.Info("ParityLab API listening", "address", server.Addr, "mode", "sandbox", "persistence", persistence)
+		serveError <- server.ListenAndServe()
+	}()
+	select {
+	case err := <-serveError:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return server.Shutdown(shutdownCtx)
 	}
+}
+
+func configuredStripeAPIBase() (string, error) {
+	value := strings.TrimSpace(os.Getenv("STRIPE_API_BASE"))
+	if value == "" {
+		return "", nil
+	}
+	if os.Getenv("PARITYLAB_ALLOW_STRIPE_MOCK") != "true" {
+		return "", errors.New("STRIPE_API_BASE requires PARITYLAB_ALLOW_STRIPE_MOCK=true")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", errors.New("STRIPE_API_BASE must be an absolute HTTP(S) URL")
+	}
+	return strings.TrimRight(value, "/"), nil
+}
+
+func validateSandboxKey(key string) error {
+	for _, prefix := range []string{"sk_live_", "rk_live_", "pk_live_"} {
+		if strings.HasPrefix(strings.TrimSpace(key), prefix) {
+			return errors.New("refusing to start with a live Stripe key")
+		}
+	}
+	return nil
 }
 
 func envOr(key, fallback string) string {

@@ -47,6 +47,21 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/Scenario' }
   /v1/runs:
+    get:
+      operationId: listRuns
+      responses:
+        '200':
+          description: Persisted runs ordered newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/List'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Run' }
     post:
       operationId: createRun
       parameters:
@@ -119,6 +134,67 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Report' }
         '404': { $ref: '#/components/responses/Error' }
+  /v1/connections/stripe/validate:
+    post:
+      operationId: validateStripeConnection
+      description: Validates a sandbox-only secret with Stripe and stores it encrypted. The secret is never returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [secret_key]
+              properties:
+                secret_key:
+                  type: string
+                  writeOnly: true
+                  pattern: '^(sk|rk)_test_'
+                sandbox_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+      responses:
+        '201':
+          description: Sanitized connected Stripe Sandbox identity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StripeConnection' }
+        '400': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/stripe/payment-intents:
+    post:
+      operationId: createStripePaymentIntentRun
+      description: Creates a real Stripe Sandbox PaymentIntent and persists its duplicate-submission verification evidence.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [connection_id, amount_minor, currency]
+              properties:
+                connection_id: { type: string, format: uuid }
+                amount_minor: { type: integer, minimum: 1, maximum: 99999999 }
+                currency: { type: string, pattern: '^[a-z]{3}$' }
+      responses:
+        '201':
+          description: Persisted verification run; replay returns the original run with Idempotent-Replayed set.
+          headers:
+            Idempotent-Replayed:
+              schema: { type: string, enum: ['true'] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /hooks/stripe/{endpoint_token}:
     post:
       operationId: ingestStripeWebhook
@@ -179,6 +255,16 @@ components:
     Fault:
       type: string
       enum: [none, duplicate, reorder, timeout, tamper]
+    StripeConnection:
+      type: object
+      additionalProperties: false
+      required: [id, stripe_account_id, sandbox_name, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        stripe_account_id: { type: string, pattern: '^acct_' }
+        sandbox_name: { type: string }
+        status: { const: connected }
+        created_at: { type: string, format: date-time }
     List:
       type: object
       required: [object, data, has_more]

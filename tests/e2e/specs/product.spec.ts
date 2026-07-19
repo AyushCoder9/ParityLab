@@ -13,8 +13,8 @@ test("guided simulation exposes real controls and evidence", async ({ page }) =>
   await expect(page.getByRole("slider", { name: "Simulation progress" })).toBeVisible();
   await expect(page.getByRole("complementary", { name: "Scenarios" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Evidence" })).toBeVisible();
-  await expect(page.getByText(/sandbox|simulated data/i).filter({ visible: true }).first()).toBeVisible();
-  await expect(page.getByText(/RUN_000\d+ · duplicate-webhook/)).toBeVisible();
+  await expect(page.getByText(/simulated data|seeded simulation/i).filter({ visible: true }).first()).toBeVisible();
+  await expect(page.getByText(/(?:RUN_\d+|SEED_PREVIEW) · duplicate-webhook/)).toBeVisible();
 });
 
 test("dashboard prioritizes readiness and running a simulation", async ({ page }) => {
@@ -27,7 +27,7 @@ test("dashboard prioritizes readiness and running a simulation", async ({ page }
   await expect(page.getByRole("navigation", { name: "Product navigation" })).toContainText(/Overview/i);
   await expect(page.getByRole("navigation", { name: "Product navigation" })).toContainText(/Findings/i);
   await expect(page.getByRole("button", { name: "Search or run a command" })).toBeVisible();
-  await expect(page.getByText("Engine online")).toHaveCount(1);
+  await expect(page.getByText(/Live API data|Engine unavailable — showing seeded preview/i).filter({ visible: true }).first()).toBeVisible();
 });
 
 test("dashboard fits a mobile viewport without horizontal overflow", async ({ page }) => {

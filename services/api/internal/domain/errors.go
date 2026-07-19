@@ -30,3 +30,7 @@ func NotFound(resource, id string) *Error {
 func Conflict(code, message, param string) *Error {
 	return &Error{Type: "idempotency_error", Code: code, Message: message, Param: param, HTTPStatus: 409}
 }
+
+func Internal(code, message string) *Error {
+	return &Error{Type: "api_error", Code: code, Message: message, HTTPStatus: 500}
+}

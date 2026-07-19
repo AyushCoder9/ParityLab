@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/domain"
 )
@@ -19,6 +22,52 @@ func TestSeededServiceProvidesDemoOverview(t *testing.T) {
 	}
 	if len(s.Scenarios()) != 5 {
 		t.Fatalf("expected five scenarios, got %d", len(s.Scenarios()))
+	}
+}
+
+func TestWebhookEventIDCannotBeReusedWithDifferentContent(t *testing.T) {
+	t.Parallel()
+	s := NewService()
+	if duplicate, err := s.RecordWebhook("evt_same", "charge.succeeded", "demo", []byte(`{"amount":1000,"currency":"usd"}`)); err != nil || duplicate {
+		t.Fatalf("first receipt duplicate=%v err=%v", duplicate, err)
+	}
+	if duplicate, err := s.RecordWebhook("evt_same", "charge.succeeded", "demo", []byte(`{"amount":2000,"currency":"usd"}`)); duplicate || !errors.Is(err, ErrWebhookConflict) {
+		t.Fatalf("changed receipt duplicate=%v err=%v", duplicate, err)
+	}
+}
+
+func TestFirstWebhookPersistsAndEnqueuesExactlyOnce(t *testing.T) {
+	t.Parallel()
+	repository := NewMemoryRepository()
+	service, err := NewServiceWithRepository(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drain deterministic seed messages before checking webhook ingress.
+	for range 3 {
+		message, ok, err := repository.ClaimOutbox(context.Background(), "drain", time.Minute, []string{"run.persisted"})
+		if err != nil || !ok {
+			t.Fatalf("drain ok=%v err=%v", ok, err)
+		}
+		if err := repository.CompleteOutbox(context.Background(), message.ID, "drain"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if duplicate, err := service.RecordWebhook("evt_queue", "payment_intent.succeeded", "demo", []byte(`{"livemode":false}`)); err != nil || duplicate {
+		t.Fatalf("first duplicate=%v err=%v", duplicate, err)
+	}
+	if duplicate, err := service.RecordWebhook("evt_queue", "payment_intent.succeeded", "demo", []byte(`{"livemode":false}`)); err != nil || !duplicate {
+		t.Fatalf("replay duplicate=%v err=%v", duplicate, err)
+	}
+	message, ok, err := repository.ClaimOutbox(context.Background(), "webhook-worker", time.Minute, []string{"stripe.webhook.received"})
+	if err != nil || !ok || message.Topic != "stripe.webhook.received" || message.AggregateID != "evt_queue" {
+		t.Fatalf("message=%+v ok=%v err=%v", message, ok, err)
+	}
+	if err := repository.CompleteOutbox(context.Background(), message.ID, "webhook-worker"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := repository.ClaimOutbox(context.Background(), "webhook-worker", time.Minute, []string{"stripe.webhook.received"}); err != nil || ok {
+		t.Fatalf("duplicate webhook enqueued another job ok=%v err=%v", ok, err)
 	}
 }
 

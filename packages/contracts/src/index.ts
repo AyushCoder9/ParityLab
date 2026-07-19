@@ -104,6 +104,14 @@ export interface ListResponse<T> {
   has_more: false;
 }
 
+export interface StripeConnection {
+  id: string;
+  stripe_account_id: string;
+  sandbox_name: string;
+  status: "connected";
+  created_at: string;
+}
+
 export interface APIError {
   error: {
     type: string;
@@ -119,6 +127,8 @@ export const API_PATHS = {
   overview: "/v1/overview",
   scenarios: "/v1/scenarios",
   runs: "/v1/runs",
+  validateStripeConnection: "/v1/connections/stripe/validate",
+  stripePaymentIntents: "/v1/stripe/payment-intents",
   run: (id: string) => `/v1/runs/${encodeURIComponent(id)}`,
   events: (id: string) => `/v1/runs/${encodeURIComponent(id)}/events`,
   report: (id: string) => `/v1/runs/${encodeURIComponent(id)}/report`,

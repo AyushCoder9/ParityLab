@@ -9,6 +9,8 @@ for file in infra/grafana/dashboards/*.json; do
 done
 
 docker compose -f infra/compose.yaml config --quiet
+docker compose -f infra/compose.test.yaml config --quiet
+tests/scripts/verify-openapi-contract.sh
 
 if command -v actionlint >/dev/null 2>&1; then
   actionlint .github/workflows/*.yml

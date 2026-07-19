@@ -3,8 +3,10 @@ package httpapi
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/engine"
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/secrets"
 )
 
 var testNow = time.Date(2026, time.July, 18, 12, 0, 0, 0, time.UTC)
@@ -28,6 +31,60 @@ func testHandler() http.Handler {
 	})
 }
 
+type httpStripeGateway struct{}
+
+func (httpStripeGateway) ValidateAccount(context.Context, string) (engine.StripeAccount, error) {
+	return engine.StripeAccount{ID: "acct_test_http"}, nil
+}
+
+func (httpStripeGateway) CreatePaymentIntent(_ context.Context, _ string, input engine.StripePaymentIntentParams) (engine.StripePaymentIntent, error) {
+	return engine.StripePaymentIntent{ID: "pi_test_http", Status: "requires_payment_method", Amount: input.AmountMinor, Currency: input.Currency}, nil
+}
+
+func TestStripeConnectionAndPaymentIntentRunContract(t *testing.T) {
+	t.Parallel()
+	repository := engine.NewMemoryRepository()
+	service, err := engine.NewServiceWithRepository(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := secrets.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'h'}, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(service, Config{
+		WebOrigin: "http://localhost:3000", WebhookSecret: "whsec_test_fixture", EndpointToken: "demo",
+		Stripe: engine.NewStripeService(repository, httpStripeGateway{}, cipher),
+	})
+	validateBody := `{"secret_key":"sk_test_never_return","sandbox_name":"QA Sandbox"}`
+	validateReq := httptest.NewRequest(http.MethodPost, "/v1/connections/stripe/validate", strings.NewReader(validateBody))
+	validateRec := httptest.NewRecorder()
+	h.ServeHTTP(validateRec, validateReq)
+	if validateRec.Code != http.StatusCreated || strings.Contains(validateRec.Body.String(), "sk_test") || strings.Contains(validateRec.Body.String(), "cipher") {
+		t.Fatalf("unsafe validation response status=%d body=%s", validateRec.Code, validateRec.Body.String())
+	}
+	var connection engine.StripeConnection
+	if err := json.Unmarshal(validateRec.Body.Bytes(), &connection); err != nil || connection.ID == "" || connection.StripeAccountID != "acct_test_http" {
+		t.Fatalf("connection=%+v err=%v", connection, err)
+	}
+	paymentBody := fmt.Sprintf(`{"connection_id":%q,"amount_minor":1099,"currency":"usd"}`, connection.ID)
+	create := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/stripe/payment-intents", strings.NewReader(paymentBody))
+		req.Header.Set("Idempotency-Key", "stripe-http-idem")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	first := create()
+	if first.Code != http.StatusCreated || !strings.Contains(first.Body.String(), `"stripe_object_id":"pi_test_http"`) {
+		t.Fatalf("create status=%d body=%s", first.Code, first.Body.String())
+	}
+	replay := create()
+	if replay.Code != http.StatusCreated || replay.Header().Get("Idempotent-Replayed") != "true" {
+		t.Fatalf("replay status=%d headers=%v body=%s", replay.Code, replay.Header(), replay.Body.String())
+	}
+}
+
 func TestReadEndpointsAndCORS(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -37,6 +94,7 @@ func TestReadEndpointsAndCORS(t *testing.T) {
 		{"/healthz", `"status":"ok"`},
 		{"/v1/overview", `"readiness_score":96`},
 		{"/v1/scenarios", `"checkout-duplicate"`},
+		{"/v1/runs", `"object":"list"`},
 		{"/v1/runs/run_000001", `"id":"run_000001"`},
 		{"/v1/runs/run_000001/events", `"object":"list"`},
 		{"/v1/runs/run_000001/report", `"assertions"`},

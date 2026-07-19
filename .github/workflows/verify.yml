@@ -45,7 +45,7 @@ jobs:
       - name: Production builds
         run: |
           pnpm build
-          go build ./services/api/cmd/paritylab
+          go build ./services/api/cmd/...
 
   browser:
     name: Browser (${{ matrix.browser }})
@@ -119,6 +119,21 @@ jobs:
       - name: Show API log on failure
         if: failure()
         run: cat api.log
+
+  persistence:
+    name: PostgreSQL restart contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Prove state and deduplication survive restart
+        env:
+          PARITYLAB_CONFIRM_FRESH: "1"
+        run: tests/scripts/persistence-restart.sh
 
   compose:
     name: Compose validation

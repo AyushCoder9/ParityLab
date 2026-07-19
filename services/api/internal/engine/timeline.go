@@ -77,9 +77,9 @@ func buildEvents(runID string, fault domain.Fault, started time.Time) []domain.E
 			TraceID:     traceID,
 			IsDuplicate: seed.duplicate,
 			Evidence: map[string]any{
-				"attempt":      1,
-				"livemode":     false,
-				"api_version":  "2026-06-30.basil",
+				"attempt":       1,
+				"livemode":      false,
+				"api_version":   "2026-06-30.basil",
 				"payload_saved": false,
 			},
 		})
@@ -98,10 +98,10 @@ func buildReport(run domain.Run, fault domain.Fault) domain.Report {
 	if fault != domain.FaultNone {
 		findings = append(findings, domain.Finding{
 			ID: "finding_" + run.ID[4:], Severity: "info", Title: findingTitle(fault),
-			Summary: "ParityLab observed the injected fault and captured the recovery evidence.",
-			Cause: "A deterministic sandbox fault was inserted at the " + findingCheckpoint(fault) + " checkpoint.",
+			Summary:     "ParityLab observed the injected fault and captured the recovery evidence.",
+			Cause:       "A deterministic sandbox fault was inserted at the " + findingCheckpoint(fault) + " checkpoint.",
 			Remediation: "No action required. Keep the demonstrated invariant covered in continuous verification.",
-			Checkpoint: findingCheckpoint(fault), Resolved: fault != domain.FaultTamper,
+			Checkpoint:  findingCheckpoint(fault), Resolved: fault != domain.FaultTamper,
 		})
 	}
 	if fault == domain.FaultTamper {
@@ -117,7 +117,7 @@ func buildReport(run domain.Run, fault domain.Fault) domain.Report {
 	return domain.Report{
 		Run: run, Summary: fmt.Sprintf("%d of %d deterministic assertions passed.", passedCount(assertions), len(assertions)),
 		Verdict: verdict, Assertions: assertions, Findings: findings,
-		State: domain.StateSnapshot{Stripe: "succeeded", Webhook: stateForFault(fault), Merchant: stateForFault(fault), Balanced: fault != domain.FaultTamper},
+		State:     domain.StateSnapshot{Stripe: "succeeded", Webhook: stateForFault(fault), Merchant: stateForFault(fault), Balanced: fault != domain.FaultTamper},
 		Generated: run.CompletedAt.Add(20 * time.Millisecond),
 	}
 }

@@ -23,11 +23,17 @@ export function SimulationConsole() {
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(1);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
-  const [engineRunID, setEngineRunID] = useState("RUN_01J8Z4");
+  const [engineRunID, setEngineRunID] = useState("SEED_PREVIEW");
   const scenario = scenarios[scenarioIndex];
   const runState = getRunState(scenario, progress);
   const visibleEvents = useMemo(() => getVisibleEvents(scenario, progress), [scenario, progress]);
   const activeEvent = visibleEvents.find((event) => event.id === selectedEvent) ?? visibleEvents.at(-1);
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("scenario");
+    const requestedIndex = scenarios.findIndex((item) => item.slug === requested);
+    if (requestedIndex >= 0) setScenarioIndex(requestedIndex);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -36,7 +42,7 @@ export function SimulationConsole() {
       ...engineScenario,
       idempotencyKey: `paritylab-demo-${scenario.slug}-v1`,
       signal: controller.signal,
-    }).then((run) => setEngineRunID(run.id.toUpperCase())).catch(() => setEngineRunID("RUN_01J8Z4"));
+    }).then((run) => setEngineRunID(run.id.toUpperCase())).catch(() => setEngineRunID("SEED_PREVIEW"));
     return () => controller.abort();
   }, [scenario.slug, scenarioIndex]);
 
@@ -76,7 +82,7 @@ export function SimulationConsole() {
           <button aria-pressed={mode === "story"} onClick={() => setMode("story")}>Story</button>
           <button aria-pressed={mode === "explore"} onClick={() => setMode("explore")}>Explore</button>
         </div>
-        <div className="demo-mobile-status"><StatusPill tone="neutral">Sandbox</StatusPill></div>
+        <div className="demo-mobile-status"><StatusPill tone="neutral">Simulated data</StatusPill></div>
         <div className="demo-header__right">
           <StatusPill tone="neutral">Simulated data</StatusPill>
           <Link href="/dashboard">Open console <Icon name="arrow" /></Link>

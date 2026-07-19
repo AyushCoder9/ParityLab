@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { Icon, StatusPill } from "@paritylab/ui";
-import { ArchitectureFlow, FaultInjector, HeroSignal, HeroVerificationRail } from "@/components/marketing";
+import { ArchitectureFlow, FaultInjector, ForensicNarrative, HeroSignal, HeroVerificationRail, MarketingMotion } from "@/components/marketing";
 import { SiteHeader } from "@/components/site-header";
 
 export default function HomePage() {
   return (
     <main className="marketing-page">
+      <MarketingMotion />
       <section className="hero-section">
         <SiteHeader />
         <div className="hero-grid">
@@ -14,8 +15,8 @@ export default function HomePage() {
             <h1>Your integration should survive <em>reality.</em></h1>
             <p className="hero-lede">ParityLab injects the failures payment systems actually face, then proves your Stripe state and merchant state converge.</p>
             <div className="hero-actions">
-              <Link href="/demo" className="cta cta--primary">Run the simulation <Icon name="arrow" /></Link>
-              <Link href="/dashboard" className="cta cta--secondary">Explore the console</Link>
+              <Link href="/demo" className="cta cta--primary" data-magnetic>Run the simulation <Icon name="arrow" /></Link>
+              <Link href="/dashboard" className="cta cta--secondary" data-magnetic>Explore the console</Link>
             </div>
           </div>
           <div className="hero-aside">
@@ -29,16 +30,18 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="truth-strip" aria-label="Product principles">
+      <section className="truth-strip" aria-label="Product principles" data-reveal>
         <p>A <strong>200</strong> means Stripe reached your endpoint.</p>
         <p>It does not mean your system is <strong>correct.</strong></p>
       </section>
 
-      <section className="fault-section" id="failure">
+      <ForensicNarrative />
+
+      <section className="fault-section" id="failure" data-reveal>
         <FaultInjector />
       </section>
 
-      <section className="system-section" id="system">
+      <section className="system-section" id="system" data-reveal>
         <div className="section-intro">
           <p>One event becomes a system.</p>
           <h2>Follow the evidence,<br />not the happy path.</h2>
@@ -46,7 +49,7 @@ export default function HomePage() {
         <ArchitectureFlow />
       </section>
 
-      <section className="suite-section">
+      <section className="suite-section" data-reveal>
         <div className="suite-title">
           <span>Scenario coverage</span>
           <h2>Make failure<br />routine.</h2>
@@ -58,7 +61,7 @@ export default function HomePage() {
             ["Subscriptions", "Renewal · recovery · plan changes", "08"],
             ["Reconciliation", "Refunds · disputes · API drift", "07"],
           ].map(([title, detail, count]) => (
-            <Link href="/demo" key={title}>
+            <Link href="/demo" key={title} data-magnetic>
               <span className="suite-count mono">{count}</span>
               <span><strong>{title}</strong><small>{detail}</small></span>
               <Icon name="arrow" />
@@ -67,7 +70,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="evidence-section" id="evidence">
+      <section className="evidence-section" id="evidence" data-reveal>
         <div className="evidence-console">
           <div className="evidence-toolbar">
             <StatusPill tone="verified">Invariant held</StatusPill>
@@ -90,7 +93,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="final-section">
+      <section className="final-section" data-reveal>
         <div>
           <p>Ready when the payment fails.</p>
           <h2>Ship with evidence.</h2>

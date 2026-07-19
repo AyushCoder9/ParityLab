@@ -1,6 +1,6 @@
 # Handoff
 
-## Resume
+## Resume without chat history
 
 ```bash
 cd /Users/ayushkumarsingh/Documents/Codex/2026-07-18-here-is-the-stripe-internship-details/ParityLab
@@ -16,26 +16,70 @@ Read in this order:
 4. `docs/MVP_BUILD_PLAN.md`
 5. `docs/IMPLEMENTATION_PLAN.md`
 6. `docs/PLAN.md`
-7. The active `docs/WORKSTREAMS/*.md` file
+7. `docs/WORKSTREAMS/ENGINE.md`, `UI.md`, and `QA.md`
 8. `docs/VERIFICATION.md`
 
-These files contain the user requirements, approved decisions, implementation map, and exact current evidence. Do not reconstruct important context from chat history.
+These files capture the user's full-product requirement, approved ordering, exact implementation claims, tests, remaining limitations, and next gates. Do not infer completion from route names, migrations, or screenshots; use `docs/STATE.md` as the claim boundary.
 
-The active build is in the Documents/Codex path above. The final mirror is at `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab` after handoff. If the two copies differ, prefer the Git copy whose `docs/STATE.md` names the latest green commit.
+## Local runtime
 
-## Commands
+Copy `.env.example` to an ignored `.env.local` and generate local secrets. Never paste credentials into chat or commit them.
 
 ```bash
-make dev        # local web + API instructions
-make test       # TypeScript and Go tests
-make build      # production builds
-make verify     # formatting, tests, and builds
-make infra-up   # PostgreSQL and observability dependencies
-make infra-down
+# Dependencies (set PARITYLAB_POSTGRES_PORT if 5432 is occupied)
+docker compose -f infra/compose.yaml up -d postgres
+
+# API
+DATABASE_URL='postgres://paritylab:<password>@127.0.0.1:<port>/paritylab?sslmode=disable' \
+PARITYLAB_MIGRATIONS_DIR=db/migrations \
+PARITYLAB_ENCRYPTION_KEY='<base64-encoded-32-byte-key>' \
+go run ./services/api/cmd/paritylab
+
+# Durable worker in a second terminal
+DATABASE_URL='postgres://paritylab:<password>@127.0.0.1:<port>/paritylab?sslmode=disable' \
+PARITYLAB_MIGRATIONS_DIR=db/migrations \
+PARITYLAB_SIGNING_SECRET='<at-least-16-byte-secret>' \
+go run ./services/api/cmd/worker
+
+# Web in a third terminal
+NEXT_PUBLIC_PARITYLAB_API_URL=http://127.0.0.1:8080 pnpm dev
 ```
 
-## Environment
+The seeded tour needs no external credentials. A real Stripe path additionally needs an `sk_test_`/restricted `rk_test_` key and `whsec_` webhook secret stored only in local environment/secret storage. Stripe CLI `1.43.8` is installed at `/opt/homebrew/bin/stripe`.
 
-Copy `.env.example` to `.env.local`. The seeded demo requires no external credentials. Never commit secrets.
+## Commands and proof
 
-If the host has no Go installation, use `golang:1.26-alpine` as documented in `docs/VERIFICATION.md`. For a normal local run, use web port 3000 and API port 8080; the verification ledger used 3100/18080 only to avoid existing host processes.
+```bash
+make test
+make build                 # builds web, API, and worker
+make verify
+go vet ./...
+
+# Destructive only to its dedicated test Compose project/volumes
+PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh
+```
+
+Browser tests can use external servers:
+
+```bash
+PARITYLAB_E2E_EXTERNAL_SERVERS=1 \
+PARITYLAB_WEB_URL=http://127.0.0.1:3000 \
+PARITYLAB_API_URL=http://127.0.0.1:8080 \
+pnpm --dir tests/e2e exec playwright test --project=chromium
+```
+
+The opt-in Stripe vertical E2E requires the isolated strict Stripe mock stack documented in `docs/WORKSTREAMS/QA.md`; set `PARITYLAB_STRIPE_VERTICAL_E2E=1` only against that mock, never against a live endpoint by accident.
+
+## Next implementation order
+
+1. Add real authentication/session validation, organization/project ownership, tenant-scoped repositories, and protected APIs.
+2. Persist findings/notifications/settings/environments and wire their UI mutations; remove the remaining session-local labels only when proven.
+3. Add a dedicated `stripe.webhook.received` consumer that correlates Stripe events to active runs and records processing state.
+4. Convert replay-only SSE to long-lived database event streaming with reconnect/`Last-Event-ID` behavior.
+5. Complete real Stripe refund and subscription/Test Clock scenario executors plus worker restart tests.
+6. Deploy web/API/worker/PostgreSQL with HTTPS webhook ingress, secret management, telemetry, backups, rate limits, and incident drills.
+7. Run the final real Stripe Sandbox acceptance flow after the user places test credentials in ignored local files.
+
+## Workspace truth
+
+The active Git repository is the Documents/Codex path above. The Desktop path is only a handoff mirror refreshed after a green commit. If the two differ, prefer the Git repository whose `docs/STATE.md` names the newest green implementation commit.

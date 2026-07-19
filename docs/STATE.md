@@ -4,53 +4,64 @@ Updated: 2026-07-19
 
 ## Current milestone
 
-The deterministic local prototype is green. The user approved the real-product expansion in `docs/MVP_BUILD_PLAN.md`; implementation is now active, beginning with PostgreSQL persistence and durable backend wiring before live product routes and premium motion.
+The approved real-product plan in `docs/MVP_BUILD_PLAN.md` has completed its durable-data, real Stripe adapter, first durable-worker vertical, live product-route, and premium-marketing-motion slices. ParityLab is now a production-shaped local MVP with a credential-gated real Stripe Sandbox path. It is not yet a deployed multi-tenant production service.
 
-## Completed product surface
+The next priority is authentication/organization ownership and persisted mutation APIs, followed by real Stripe webhook-to-run correlation, the remaining scenario executors, hosted deployment, and a real Stripe Sandbox acceptance run.
 
-- Premium Optical Ledger marketing route at `/`.
-- Deterministic Story/Explore failure simulator at `/demo`.
-- Responsive authenticated-style product dashboard at `/dashboard`.
-- Live browser-to-Go integration: the simulator creates idempotent API runs and the dashboard reports engine connectivity.
-- Five API scenarios, four visually guided scenarios, overview, run detail, JSON/SSE events, report, and signed webhook endpoints.
-- Stripe-shaped request errors, request IDs, raw-body signature verification, timestamp tolerance, sandbox-only enforcement, duplicate suppression, redaction, CORS, and body limits.
-- PostgreSQL 18 migration and optional Redpanda, ClickHouse, OpenTelemetry, Prometheus, Tempo, and Grafana profiles.
-- Stripe App extension skeleton, OpenAPI/TypeScript contracts, CI, security scanning, SBOM, SLO, threat model, and incident runbook.
+## What is actually implemented
 
-## Exact green evidence
+### Backend and data truth
 
-- `NEXT_PUBLIC_PARITYLAB_API_URL=http://127.0.0.1:18080 pnpm build` — pass on Next.js 16.2.10; `/`, `/demo`, `/dashboard`, and not-found prerendered.
-- `pnpm lint` — pass.
-- `pnpm typecheck` — pass for web and Playwright projects.
-- `pnpm test` — pass, 3/3 deterministic simulation tests.
-- Containerized `go test ./...` on `golang:1.26-alpine` — pass for engine, HTTP API, and contract packages.
-- Containerized `go vet ./... && go build ./...` — exit 0.
-- Live container contract — signed webhook deduplication and invalid-signature rejection both pass against the running API.
-- Integrated Playwright Chromium + mobile Chromium — two consecutive final runs passed 28/28, including axe serious/critical scan, keyboard navigation, responsive overflow, API, idempotency, UI/API connectivity, and product behavior.
-- `docker compose -f infra/compose.yaml config -q` and `tests/scripts/verify-config.sh` — pass.
-- `pnpm audit --prod` — no known vulnerabilities after patched framework/tooling upgrades and PostCSS override.
-- Desktop and mobile screenshots were inspected manually; no blocking layout defects found.
+- Go 1.26 API with PostgreSQL 18 as the durable runtime adapter and a memory adapter for focused tests/demos.
+- Checksum-validated, advisory-lock-protected automatic migrations through `000005_reference_merchant`.
+- Atomic run, event, report, idempotency, outbox, connection, webhook-deduplication, assertion, and reference-merchant-effect storage.
+- Restart-safe run reads, idempotent request replay, webhook duplicate detection, and changed-body conflict rejection.
+- Official Stripe Go SDK `v86.1.1` adapter. Only `sk_test_` and `rk_test_` secrets are accepted; live-shaped keys and live-mode webhook events are rejected.
+- Server-side Stripe account validation, sanitized connection responses, AES-256-GCM encrypted connection secrets, and a real PaymentIntent-backed run endpoint.
+- Stable Stripe idempotency/correlation parameters, integer minor-unit validation, persisted `pi_` evidence, and reproducible reports.
+- Separate production worker command with PostgreSQL `FOR UPDATE SKIP LOCKED` claims, topic allowlists, leases, heartbeat, expiry recovery, retry backoff, terminal failure, and graceful shutdown.
+- Versioned HMAC-signed reference-merchant contract and controlled healthy/duplicate/reorder/timeout/tamper relay behavior.
+- Durable exactly-once merchant effects and a worker-written verification assertion in the persisted report.
+- Webhook ingress atomically persists/deduplicates and enqueues `stripe.webhook.received`; the current verification worker deliberately leaves that topic pending for a future correlated webhook consumer.
 
-See `docs/VERIFICATION.md` for the complete command ledger and repair history.
+### Product and presentation
 
-## Honest limitations
+- Fifteen Next.js routes: marketing, demo, login, onboarding, dashboard, scenarios, runs/detail, findings, reports/detail, connections, environments, notifications, and settings.
+- Existing API-backed scenarios, runs, events, reports, report-derived findings, overview readiness, connection validation, and PaymentIntent launch.
+- Unsupported mutations are explicitly labeled browser/session-local; fixtures use `Seeded preview` or `Simulated data` and are never labeled live.
+- Functional command palette, navigation, account/notification controls, filters, exports, printing, copy actions, onboarding, connection checks, and mobile `More`/account menus.
+- A 310svh pinned forensic marketing narrative driven by scroll progress, stateful event braid, chapter activation, premium hover/entry transitions, mobile linearization, and reduced-motion fallback.
+- Responsive Pixel 7 product layout, keyboard navigation, axe serious/critical checks, and visible provenance at all supported viewport sizes.
 
-- Real Stripe Sandbox execution is credential-gated and was not run because no test keys or webhook secret were provided. The deterministic sandbox path is fully functional without credentials.
-- The local runtime adapter is intentionally in-memory. The PostgreSQL/outbox schema and infrastructure profile exist, but the API does not yet persist runs or publish outbox messages.
-- WebKit is configured in CI but was not executed locally because only Chromium was installed.
-- k6 scripts exist but k6 load tests were not executed locally.
-- The full dependency Compose stack was configuration-validated, not booted through two destructive fresh-volume cycles on this shared Docker host.
+## Exact green evidence from this worktree
 
-## Last green implementation commit
+- `make verify && go vet ./... && git diff --check` — exit 0; includes frontend lint/typecheck/unit tests, all Go tests, 15-route production build, and both API/worker builds.
+- `go test -race ./...` — all API, repository, Stripe adapter, verification, worker, and contract packages passed under the race detector.
+- `PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh` — exit 0 on a fresh isolated PostgreSQL + API + strict Stripe mock stack; passed for `run_000005` and cleaned its scoped containers/volumes.
+- Chromium full suite against the integrated stack — 50/50 passed before the opt-in test was added.
+- Mobile Chromium final suite — 50 passed, one intentional opt-in skip; targeted mobile portability 7/7 passed.
+- Opt-in browser -> live API -> strict Stripe mock -> PostgreSQL ledger/report vertical — 1/1 passed.
+- Strict Stripe mock and service tests cover authorization, live-key rejection, minor units, currency, stable correlation metadata, sanitized failures, and replay without a second Stripe call.
+- Manual worker proof: `run_000034` and post-worker-restart `run_000035` each persisted `assert_reference_merchant_exactly_once`; two durable merchant effects remained after restart, and unhandled outbox topics stayed pending.
+- `tests/scripts/verify-config.sh`, OpenAPI drift validation, shell syntax validation, and `git diff --check` pass.
+- Desktop marketing and Pixel 7 dashboard screenshots were inspected; the prior hero whitespace issue is gone and the mobile product navigation is complete.
 
-`16e2b72` — `fix: turn hero whitespace into verification rail`
+See `docs/VERIFICATION.md` and `docs/WORKSTREAMS/*.md` for the command ledger and lane-level evidence.
 
-## Desktop mirror
+## Honest limitations / next gates
 
-Verified clean at `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`. The mirror is refreshed after each green handoff commit.
+- No real Stripe account was contacted in this run because the user has not supplied local Sandbox credentials. The official SDK path is proven with a strict local Stripe server, not falsely reported as a live Stripe run.
+- Authentication, sessions, membership enforcement, and tenant authorization are not implemented. The current fixed local workspace/project is for local MVP verification only.
+- Findings, notifications, settings, and environment changes remain explicitly session/browser-local until their protected mutation APIs exist.
+- `stripe.webhook.received` is durably queued but not yet correlated to a run or consumed by a dedicated webhook-domain worker.
+- Only the PaymentIntent duplicate-delivery path has the complete real-adapter + durable-worker + merchant-assertion vertical. Remaining refund, subscription/Test Clock, reorder, timeout, and tamper scenario executors are not fully connected to real Stripe objects.
+- The SSE endpoint replays persisted events and completion; it is not yet a database-backed long-lived append subscription with `Last-Event-ID` recovery.
+- WebKit is configured in CI but was not installed/run locally. k6/load, hosted backup/recovery, penetration, and two clean hosted CI runs remain outstanding.
+- No hosted web/API/worker/database deployment or public HTTPS Stripe webhook endpoint exists yet.
 
-## Next optional expansions
+## Repository and mirror
 
-1. Provide Stripe test credentials and run the real Sandbox adapter path.
-2. Wire the PostgreSQL/outbox runtime adapter and execute the two fresh-volume Compose cycles.
-3. Run WebKit and k6 locally, or allow the configured CI matrix to provide that evidence.
+- Active repository: `/Users/ayushkumarsingh/Documents/Codex/2026-07-18-here-is-the-stripe-internship-details/ParityLab`
+- Desktop mirror target: `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`
+- Latest committed plan checkpoint before this slice: `5288813` (`docs: confirm real-product MVP build plan`).
+- The integrated implementation commit and mirror refresh are the root agent's next handoff actions.

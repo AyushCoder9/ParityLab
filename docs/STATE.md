@@ -1,10 +1,10 @@
 # Project state
 
-Updated: 2026-07-18
+Updated: 2026-07-19
 
 ## Current milestone
 
-The production-grade local v1 is implementation-complete and in final repository handoff. Marketing, guided simulation, dashboard, Go reliability engine, shared contracts, webhook ingress, infrastructure profiles, CI, security documentation, and automated verification are present.
+The deterministic local prototype is green. The user approved the real-product expansion in `docs/MVP_BUILD_PLAN.md`; implementation is now active, beginning with PostgreSQL persistence and durable backend wiring before live product routes and premium motion.
 
 ## Completed product surface
 

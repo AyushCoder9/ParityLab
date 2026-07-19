@@ -13,10 +13,11 @@ Read in this order:
 1. `AGENTS.md`
 2. `docs/PROJECT_BRIEF.md`
 3. `docs/STATE.md`
-4. `docs/IMPLEMENTATION_PLAN.md`
-5. `docs/PLAN.md`
-6. The active `docs/WORKSTREAMS/*.md` file
-7. `docs/VERIFICATION.md`
+4. `docs/MVP_BUILD_PLAN.md`
+5. `docs/IMPLEMENTATION_PLAN.md`
+6. `docs/PLAN.md`
+7. The active `docs/WORKSTREAMS/*.md` file
+8. `docs/VERIFICATION.md`
 
 These files contain the user requirements, approved decisions, implementation map, and exact current evidence. Do not reconstruct important context from chat history.
 

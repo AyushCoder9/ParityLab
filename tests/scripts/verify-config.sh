@@ -12,6 +12,7 @@ docker compose -f infra/compose.yaml config --quiet
 docker compose -f infra/compose.test.yaml config --quiet
 docker compose -f infra/compose.auth-test.yaml config --quiet
 docker compose -f infra/compose.webhook-test.yaml config --quiet
+docker compose -f infra/compose.sse-test.yaml config --quiet
 tests/scripts/verify-openapi-contract.sh
 
 if command -v actionlint >/dev/null 2>&1; then

@@ -1,6 +1,6 @@
 # Engine workstream
 
-Status: Phase 1 persistence, the credential-gated Phase 2 Stripe Sandbox PaymentIntent slice, the smallest green Phase 3 durable worker/reference-merchant slice, and the authentication/tenant-resource slice are implemented.
+Status: Phase 1 persistence, the credential-gated Phase 2 Stripe Sandbox PaymentIntent slice, the smallest green Phase 3 durable worker/reference-merchant slice, authentication/tenant resources, webhook correlation, and resumable durable SSE are implemented.
 
 ## Delivered
 
@@ -45,7 +45,7 @@ The process does not listen until PostgreSQL is reachable and every migration is
 - Webhook domain processing beyond its durable ingress job remains a later Phase 3 expansion.
 - The outbox is transactionally populated but no publisher/lease loop runs yet.
 - Authentication and tenant authorization were deferred at that checkpoint and are now delivered in the authentication/tenant-resource slice below.
-- Long-lived database-backed SSE with `Last-Event-ID` is not part of this slice; the route continues to stream the persisted finite timeline.
+- Long-lived database-backed SSE was not part of the Phase 1 checkpoint. That limitation is superseded by the resumable event-streaming slice below.
 
 ## Phase 2 Stripe Sandbox vertical slice
 
@@ -117,6 +117,16 @@ The API and worker are intentionally separate processes. The API remains latency
 - A successful match atomically creates one API-visible run event, one status-neutral report assertion, one normalized assertion, one webhook-evidence row, and the terminal processing state. Retrying after a crash or worker restart cannot duplicate those effects.
 - Unsupported event types become terminal `ignored`; missing, unknown, mismatched, or ambiguous correlations become terminal `unmatched`. Malformed internal payloads become permanent failures, while transient repository failures retain the outbox retry contract.
 - Verification jobs retain their previous behavior and unknown topics are not falsely published.
+
+### Resumable durable event streaming
+
+- `EventsAfter`, tenant-scoped `EventsAfterForProject`, and `PublicEventsAfter` return bounded ordered event batches plus an atomic high-water view from both PostgreSQL and memory adapters. PostgreSQL filters by sequence instead of rereading the complete ledger on every poll.
+- `GET /v1/runs/{id}/events` keeps JSON behavior by default and becomes a long-lived SSE response only for `Accept: text/event-stream`.
+- SSE strictly accepts one canonical non-negative decimal `Last-Event-ID`. Malformed, duplicate, overflow, leading-zero, and ahead-of-ledger cursors receive a Stripe-shaped 400 before stream headers are committed.
+- Stable sequence IDs resume at `sequence > Last-Event-ID`; 100-event batching prevents unbounded response work. The stream emits `retry: 2000`, one truthful terminal `run.complete` snapshot, 15-second heartbeat comments, and later durable evidence without closing after the initial replay.
+- Repository failures after headers produce only a sanitized `stream.error` frame and close so native clients reconnect with their last acknowledged ID. Request cancellation stops both tickers and the handler.
+- The API retains its 15-second global write timeout for ordinary traffic. Each SSE write/flush refreshes a 10-second deadline through Go's `ResponseController`, preventing both absolute stream termination and indefinitely blocked slow clients.
+- Authenticated streams derive the project from the opaque session. Anonymous access remains limited to public seeded runs; public or foreign-tenant IDs return 404.
 
 ### Remaining Phase 3 gaps
 

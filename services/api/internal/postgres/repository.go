@@ -290,6 +290,83 @@ func (r *Repository) PublicEvents(ctx context.Context, id string) ([]domain.Even
 	return r.events(ctx, id, nil)
 }
 
+func (r *Repository) EventsAfter(ctx context.Context, id string, after, limit int) (engine.EventStreamBatch, bool, error) {
+	return r.eventsAfter(ctx, id, "", false, after, limit)
+}
+
+func (r *Repository) EventsAfterForProject(ctx context.Context, projectID, id string, after, limit int) (engine.EventStreamBatch, bool, error) {
+	return r.eventsAfter(ctx, id, projectID, false, after, limit)
+}
+
+func (r *Repository) PublicEventsAfter(ctx context.Context, id string, after, limit int) (engine.EventStreamBatch, bool, error) {
+	return r.eventsAfter(ctx, id, "", true, after, limit)
+}
+
+func (r *Repository) eventsAfter(
+	ctx context.Context,
+	id string,
+	projectID string,
+	publicOnly bool,
+	after int,
+	limit int,
+) (engine.EventStreamBatch, bool, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	runQuery := `SELECT snapshot FROM runs WHERE id = $1`
+	args := []any{id}
+	if projectID != "" {
+		runQuery += ` AND project_id = $2`
+		args = append(args, projectID)
+	} else if publicOnly {
+		runQuery += ` AND project_id IS NULL`
+	}
+	run, found, err := scanRun(r.pool.QueryRow(ctx, runQuery, args...))
+	if err != nil || !found {
+		return engine.EventStreamBatch{}, found, err
+	}
+	rows, err := r.pool.Query(ctx, `
+		WITH selected AS (
+			SELECT sequence, snapshot
+			FROM run_events
+			WHERE run_id = $1 AND sequence > $2
+			ORDER BY sequence
+			LIMIT $3
+		), high_water AS (
+			SELECT COALESCE(max(sequence), 0)::integer AS sequence
+			FROM run_events
+			WHERE run_id = $1
+		)
+		SELECT high_water.sequence, selected.snapshot
+		FROM high_water
+		LEFT JOIN selected ON true
+		ORDER BY selected.sequence
+	`, id, after, limit)
+	if err != nil {
+		return engine.EventStreamBatch{}, false, err
+	}
+	defer rows.Close()
+	batch := engine.EventStreamBatch{Run: run, Events: make([]domain.Event, 0, limit)}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&batch.HighWater, &raw); err != nil {
+			return engine.EventStreamBatch{}, false, err
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		var event domain.Event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return engine.EventStreamBatch{}, false, err
+		}
+		batch.Events = append(batch.Events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return engine.EventStreamBatch{}, false, err
+	}
+	return batch, true, nil
+}
+
 func (r *Repository) events(ctx context.Context, id string, projectID *string) ([]domain.Event, bool, error) {
 	if projectID != nil {
 		var exists bool

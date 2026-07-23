@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,10 @@ type Config struct {
 	Stripe          *engine.StripeService
 	Auth            *auth.Service
 	InsecureCookies bool
+	SSEPollInterval time.Duration
+	SSEHeartbeat    time.Duration
+	SSERetry        time.Duration
+	SSEWriteTimeout time.Duration
 }
 
 type Handler struct {
@@ -46,6 +52,18 @@ func New(service *engine.Service, config Config) http.Handler {
 	}
 	if config.Now == nil {
 		config.Now = time.Now
+	}
+	if config.SSEPollInterval <= 0 {
+		config.SSEPollInterval = 500 * time.Millisecond
+	}
+	if config.SSEHeartbeat <= 0 {
+		config.SSEHeartbeat = 15 * time.Second
+	}
+	if config.SSERetry <= 0 {
+		config.SSERetry = 2 * time.Second
+	}
+	if config.SSEWriteTimeout <= 0 {
+		config.SSEWriteTimeout = 10 * time.Second
 	}
 	h := &Handler{engine: service, config: config, mux: http.NewServeMux(), loginLimiter: newLoginLimiter(config.Now)}
 	h.routes()
@@ -187,7 +205,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Idempotency-Key, Stripe-Signature")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Idempotency-Key, Last-Event-ID, Stripe-Signature")
 	w.Header().Set("Access-Control-Expose-Headers", "Idempotent-Replayed, X-Request-ID")
 	w.Header().Set("Vary", "Origin")
 	if r.Method == http.MethodOptions {
@@ -305,6 +323,10 @@ func (h *Handler) run(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		h.eventStream(w, r, id)
+		return
+	}
 	var events []domain.Event
 	var ok bool
 	if h.config.Auth == nil {
@@ -324,28 +346,242 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, domain.NotFound("run", id))
 		return
 	}
-	if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-		h.writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": events, "has_more": false})
+	h.writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": events, "has_more": false})
+}
+
+type eventBatchReader func(context.Context, int, int) (engine.EventStreamBatch, bool, error)
+
+func (h *Handler) eventStream(w http.ResponseWriter, r *http.Request, id string) {
+	reader, valid := h.eventReader(w, r, id)
+	if !valid {
+		return
+	}
+	lastSequence, apiErr := parseLastEventID(r.Header.Values("Last-Event-ID"))
+	if apiErr != nil {
+		h.writeError(w, r, apiErr)
+		return
+	}
+	const batchSize = 100
+	batch, found, err := reader(r.Context(), lastSequence, batchSize)
+	if err != nil {
+		h.writeError(w, r, domain.Internal("event_stream_unavailable", "The event stream could not be opened."))
+		return
+	}
+	if !found {
+		h.writeError(w, r, domain.NotFound("run", id))
+		return
+	}
+	if lastSequence > batch.HighWater {
+		h.writeError(w, r, domain.Invalid(
+			"last_event_id_ahead",
+			"Last-Event-ID is ahead of the latest event for this run.",
+			"Last-Event-ID",
+		))
+		return
+	}
+	_, canFlush := w.(http.Flusher)
+	if !canFlush {
+		h.writeError(w, r, domain.Internal("streaming_unsupported", "Streaming is unavailable for this response."))
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	flusher, canFlush := w.(http.Flusher)
-	for _, event := range events {
-		payload, err := json.Marshal(event)
-		if err != nil {
+	if err := refreshSSEWriteDeadline(w, h.config.SSEWriteTimeout); err != nil {
+		h.writeError(w, r, domain.Internal("streaming_unavailable", "Streaming is unavailable for this response."))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	retryMilliseconds := h.config.SSERetry.Milliseconds()
+	if retryMilliseconds < 1 {
+		retryMilliseconds = 1
+	}
+	if err := refreshSSEWriteDeadline(w, h.config.SSEWriteTimeout); err != nil {
+		return
+	}
+	if _, err := fmt.Fprintf(w, "retry: %d\n\n", retryMilliseconds); err != nil {
+		return
+	}
+	if err := flushSSE(w, h.config.SSEWriteTimeout); err != nil {
+		return
+	}
+
+	completeSent := false
+	for {
+		next, writeErr := writeEventBatch(w, batch, lastSequence, h.config.SSEWriteTimeout)
+		if writeErr != nil {
+			return
+		}
+		lastSequence = next
+		if err := flushSSE(w, h.config.SSEWriteTimeout); err != nil {
+			return
+		}
+		if len(batch.Events) < batchSize {
+			break
+		}
+		batch, found, err = reader(r.Context(), lastSequence, batchSize)
+		if err != nil || !found {
+			writeStreamError(w, h.config.SSEWriteTimeout)
+			return
+		}
+	}
+	if isTerminalRun(batch.Run) {
+		if err := refreshSSEWriteDeadline(w, h.config.SSEWriteTimeout); err != nil {
+			return
+		}
+		if _, err := fmt.Fprintf(w, "event: run.complete\ndata: {\"run_id\":%q}\n\n", id); err != nil {
+			return
+		}
+		completeSent = true
+		if err := flushSSE(w, h.config.SSEWriteTimeout); err != nil {
+			return
+		}
+	}
+
+	poll := time.NewTicker(h.config.SSEPollInterval)
+	defer poll.Stop()
+	heartbeat := time.NewTicker(h.config.SSEHeartbeat)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-poll.C:
+			batch, found, err = reader(r.Context(), lastSequence, batchSize)
+			if err != nil || !found {
+				writeStreamError(w, h.config.SSEWriteTimeout)
+				return
+			}
+			for {
+				next, writeErr := writeEventBatch(w, batch, lastSequence, h.config.SSEWriteTimeout)
+				if writeErr != nil {
+					return
+				}
+				lastSequence = next
+				if !completeSent && isTerminalRun(batch.Run) {
+					if err := refreshSSEWriteDeadline(w, h.config.SSEWriteTimeout); err != nil {
+						return
+					}
+					if _, err := fmt.Fprintf(w, "event: run.complete\ndata: {\"run_id\":%q}\n\n", id); err != nil {
+						return
+					}
+					completeSent = true
+				}
+				if err := flushSSE(w, h.config.SSEWriteTimeout); err != nil {
+					return
+				}
+				if len(batch.Events) < batchSize {
+					break
+				}
+				batch, found, err = reader(r.Context(), lastSequence, batchSize)
+				if err != nil || !found {
+					writeStreamError(w, h.config.SSEWriteTimeout)
+					return
+				}
+			}
+		case <-heartbeat.C:
+			if err := refreshSSEWriteDeadline(w, h.config.SSEWriteTimeout); err != nil {
+				return
+			}
+			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			if err := flushSSE(w, h.config.SSEWriteTimeout); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (h *Handler) eventReader(w http.ResponseWriter, r *http.Request, id string) (eventBatchReader, bool) {
+	if h.config.Auth == nil {
+		return func(ctx context.Context, after, limit int) (engine.EventStreamBatch, bool, error) {
+			return h.engine.EventsAfter(ctx, id, after, limit)
+		}, true
+	}
+	identity, authenticated, valid := h.optionalSession(w, r)
+	if !valid {
+		return nil, false
+	}
+	if authenticated {
+		return func(ctx context.Context, after, limit int) (engine.EventStreamBatch, bool, error) {
+			return h.engine.EventsAfterForProject(ctx, identity.Project.ID, id, after, limit)
+		}, true
+	}
+	return func(ctx context.Context, after, limit int) (engine.EventStreamBatch, bool, error) {
+		return h.engine.PublicEventsAfter(ctx, id, after, limit)
+	}, true
+}
+
+func parseLastEventID(values []string) (int, *domain.Error) {
+	if len(values) == 0 {
+		return 0, nil
+	}
+	if len(values) != 1 {
+		return 0, domain.Invalid("invalid_last_event_id", "Last-Event-ID must contain one decimal event sequence.", "Last-Event-ID")
+	}
+	value := values[0]
+	if value == "" || (len(value) > 1 && value[0] == '0') {
+		return 0, domain.Invalid("invalid_last_event_id", "Last-Event-ID must contain one decimal event sequence.", "Last-Event-ID")
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return 0, domain.Invalid("invalid_last_event_id", "Last-Event-ID must contain one decimal event sequence.", "Last-Event-ID")
+		}
+	}
+	parsed, err := strconv.ParseInt(value, 10, 32)
+	if err != nil {
+		return 0, domain.Invalid("invalid_last_event_id", "Last-Event-ID must contain one decimal event sequence.", "Last-Event-ID")
+	}
+	return int(parsed), nil
+}
+
+func writeEventBatch(w http.ResponseWriter, batch engine.EventStreamBatch, after int, writeTimeout time.Duration) (int, error) {
+	last := after
+	for _, event := range batch.Events {
+		if event.Sequence <= last {
 			continue
 		}
-		_, _ = fmt.Fprintf(w, "id: %d\nevent: run.event\ndata: %s\n\n", event.Sequence, payload)
-		if canFlush {
-			flusher.Flush()
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return last, err
 		}
+		if err := refreshSSEWriteDeadline(w, writeTimeout); err != nil {
+			return last, err
+		}
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: run.event\ndata: %s\n\n", event.Sequence, payload); err != nil {
+			return last, err
+		}
+		last = event.Sequence
 	}
-	_, _ = fmt.Fprintf(w, "event: run.complete\ndata: {\"run_id\":%q}\n\n", id)
-	if canFlush {
-		flusher.Flush()
+	return last, nil
+}
+
+func isTerminalRun(run domain.Run) bool {
+	return run.Status == domain.RunPassed || run.Status == domain.RunFailed
+}
+
+func writeStreamError(w http.ResponseWriter, writeTimeout time.Duration) {
+	if err := refreshSSEWriteDeadline(w, writeTimeout); err != nil {
+		return
 	}
+	_, _ = io.WriteString(w, "event: stream.error\ndata: {\"code\":\"stream_unavailable\"}\n\n")
+	_ = http.NewResponseController(w).Flush()
+}
+
+func refreshSSEWriteDeadline(w http.ResponseWriter, timeout time.Duration) error {
+	err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout))
+	if errors.Is(err, http.ErrNotSupported) {
+		return nil
+	}
+	return err
+}
+
+func flushSSE(w http.ResponseWriter, writeTimeout time.Duration) error {
+	if err := refreshSSEWriteDeadline(w, writeTimeout); err != nil {
+		return err
+	}
+	return http.NewResponseController(w).Flush()
 }
 
 func (h *Handler) report(w http.ResponseWriter, r *http.Request) {

@@ -109,6 +109,16 @@ func (r *MemoryRepository) EventsForProject(ctx context.Context, projectID, id s
 	return r.Events(ctx, id)
 }
 
+func (r *MemoryRepository) EventsAfterForProject(_ context.Context, projectID, id string, after, limit int) (EventStreamBatch, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	run, ok := r.runs[id]
+	if !ok || r.projectByRun[id] != projectID {
+		return EventStreamBatch{}, false, nil
+	}
+	return r.eventsAfterLocked(run, after, limit), true, nil
+}
+
 func (r *MemoryRepository) ReportForProject(ctx context.Context, projectID, id string) (domain.Report, bool, error) {
 	if _, ok, err := r.RunForProject(ctx, projectID, id); err != nil || !ok {
 		return domain.Report{}, ok, err
@@ -142,6 +152,16 @@ func (r *MemoryRepository) PublicEvents(ctx context.Context, id string) ([]domai
 		return nil, ok, err
 	}
 	return r.Events(ctx, id)
+}
+
+func (r *MemoryRepository) PublicEventsAfter(_ context.Context, id string, after, limit int) (EventStreamBatch, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	run, ok := r.runs[id]
+	if _, tenantOwned := r.projectByRun[id]; !ok || tenantOwned {
+		return EventStreamBatch{}, false, nil
+	}
+	return r.eventsAfterLocked(run, after, limit), true, nil
 }
 
 func (r *MemoryRepository) PublicReport(ctx context.Context, id string) (domain.Report, bool, error) {
@@ -223,6 +243,35 @@ func (r *MemoryRepository) Events(_ context.Context, id string) ([]domain.Event,
 	defer r.mu.RUnlock()
 	value, ok := r.events[id]
 	return cloneEvents(value), ok, nil
+}
+
+func (r *MemoryRepository) EventsAfter(_ context.Context, id string, after, limit int) (EventStreamBatch, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	run, ok := r.runs[id]
+	if !ok {
+		return EventStreamBatch{}, false, nil
+	}
+	return r.eventsAfterLocked(run, after, limit), true, nil
+}
+
+func (r *MemoryRepository) eventsAfterLocked(run domain.Run, after, limit int) EventStreamBatch {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	all := r.events[run.ID]
+	batch := EventStreamBatch{Run: run, Events: make([]domain.Event, 0, min(limit, len(all)))}
+	for _, event := range all {
+		if event.Sequence > batch.HighWater {
+			batch.HighWater = event.Sequence
+		}
+		if event.Sequence <= after || len(batch.Events) >= limit {
+			continue
+		}
+		batch.Events = append(batch.Events, event)
+	}
+	sort.Slice(batch.Events, func(i, j int) bool { return batch.Events[i].Sequence < batch.Events[j].Sequence })
+	return batch
 }
 
 func (r *MemoryRepository) Report(_ context.Context, id string) (domain.Report, bool, error) {

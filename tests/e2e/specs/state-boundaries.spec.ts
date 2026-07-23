@@ -99,6 +99,63 @@ test.describe("persisted product state boundaries", () => {
 });
 
 test.describe("mocked live run vertical slice", () => {
+  test("run detail appends streamed durable evidence without duplicate sequences", async ({ page }) => {
+    const run = {
+      id: "run_900004",
+      scenario_id: "checkout-duplicate",
+      scenario_name: "Streaming checkout verification",
+      fault: "duplicate",
+      status: "passed",
+      score: 98,
+      started_at: "2026-07-19T00:00:00Z",
+      completed_at: "2026-07-19T00:00:03Z",
+      duration_ms: 3000,
+      event_count: 2,
+      finding_count: 0,
+      recovered: true,
+      environment: "sandbox",
+      stripe_object_id: "pi_mock_stream",
+      merchant_order_id: "ord_mock_stream",
+    };
+    const initialEvent = {
+      id: "event_stream_1", run_id: run.id, sequence: 1, at: "2026-07-19T00:00:01Z",
+      source: "api", target: "stripe", type: "payment_intent.created", title: "PaymentIntent created",
+      detail: "The durable run recorded its Stripe object.", status: "healthy", latency_ms: 24,
+      checkpoint: "stripe-create", trace_id: "trace_stream_1",
+    };
+    const appendedEvent = {
+      id: "event_stream_2", run_id: run.id, sequence: 2, at: "2026-07-19T00:00:02Z",
+      source: "stripe", target: "webhook-ingress", type: "payment_intent.succeeded", title: "Stripe webhook correlated",
+      detail: "Later durable evidence arrived through the resumable stream.", status: "healthy", latency_ms: 0,
+      checkpoint: "stripe-webhook", trace_id: "trace_stream_2",
+    };
+
+    await page.route(/\/v1\/runs\/run_900004$/, (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify(run),
+    }));
+    await page.route(/\/v1\/runs\/run_900004\/events$/, async (route) => {
+      if ((await route.request().headerValue("accept"))?.includes("text/event-stream")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          headers: { "Cache-Control": "no-store" },
+          body: `retry: 2000\n\nid: 2\nevent: run.event\ndata: ${JSON.stringify(appendedEvent)}\n\n`,
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ object: "list", data: [initialEvent], has_more: false }),
+      });
+    });
+
+    await page.goto("/runs/run_900004");
+    await expect(page.getByText("Live run evidence", { exact: true })).toBeVisible();
+    await expect(page.getByText("Stripe webhook correlated", { exact: true })).toBeVisible();
+    await expect(page.locator(".event-ledger li")).toHaveCount(2);
+    await expect(page.getByText("Stripe webhook correlated", { exact: true })).toHaveCount(1);
+  });
+
   test("Stripe connection returns only sanitized state and launches the frozen payment route", async ({ page }) => {
     const connectionID = "11111111-2222-4333-8444-555555555555";
     const testSecret = "rk_test_browser_contract_only";

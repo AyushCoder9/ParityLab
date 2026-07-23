@@ -1,6 +1,6 @@
 # UI workstream
 
-Status: authenticated product-resource slice implemented; Chromium and WebKit integrated acceptance green
+Status: authenticated product resources and live resumable run evidence implemented; Chromium and WebKit integrated acceptance green
 
 ## Delivered
 
@@ -24,6 +24,8 @@ Status: authenticated product-resource slice implemented; Chromium and WebKit in
 - Replaced browser-only settings, environment selection, finding resolution, and notification read state with protected API reads and mutations. Successful project updates refresh the shared session view, and resource changes refresh shell counters without a page reload.
 - Connections now load the authenticated project’s persisted sanitized connection records before offering a new secret handoff. Stripe secrets remain memory-only in the form and are cleared after every attempt.
 - Corrected onboarding copy to describe the persisted user/organization/project transaction and server-side encrypted connection setup; it no longer claims the workspace is browser-only.
+- Run detail now bootstraps the durable JSON ledger and opens a credentialed native `EventSource`. Browser reconnects use the server's stable event IDs automatically; the UI rejects wrong-run/non-integer frames, deduplicates by sequence, sorts appended evidence, and closes the stream on unmount.
+- The live evidence notice reports connecting, streaming, or reconnecting state. Appended ledger rows receive a short transform/opacity arrival treatment with an explicit reduced-motion fallback.
 
 ## Verification
 
@@ -44,7 +46,7 @@ Status: authenticated product-resource slice implemented; Chromium and WebKit in
 
 - Real Stripe Sandbox success remains credential-gated. The secure connection and PaymentIntent UI contracts are implemented, but a successful end-to-end browser run requires `PARITYLAB_ENCRYPTION_KEY` plus an `rk_test_...`/`sk_test_...` credential supplied by the user.
 - The current authenticated UI covers one owner organization/project. Invitations, project switching, password recovery/verification, MFA/passkeys, and session inventory are not yet product screens.
-- SSE-driven live run insertion and richer durable mutation feedback remain. The bundled reference merchant is local-only, and the public demo plus seeded run/report fallbacks remain explicitly labeled as simulations or seeded evidence.
+- Richer durable mutation feedback beyond the live run ledger remains. The bundled reference merchant is local-only, and the public demo plus seeded run/report fallbacks remain explicitly labeled as simulations or seeded evidence.
 
 ## Integration notes
 

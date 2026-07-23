@@ -4,9 +4,9 @@ Updated: 2026-07-23
 
 ## Current milestone
 
-The approved real-product plan in `docs/MVP_BUILD_PLAN.md` has completed its durable-data, real Stripe adapter, first durable-worker vertical, authentication/tenancy, persisted product-resource, live product-route, and premium-marketing-motion slices. ParityLab is now a production-shaped, tenant-aware local MVP with a credential-gated real Stripe Sandbox path. It is not yet a deployed production service.
+The approved real-product plan in `docs/MVP_BUILD_PLAN.md` has completed its durable-data, real Stripe adapter, first durable-worker vertical, authentication/tenancy, persisted product-resource, resumable event-streaming, live product-route, and premium-marketing-motion slices. ParityLab is now a production-shaped, tenant-aware local MVP with a credential-gated real Stripe Sandbox path. It is not yet a deployed production service.
 
-The next priority is long-lived resumable event streaming and the remaining scenario executors, followed by hosted deployment and a real Stripe Sandbox acceptance run.
+The next priority is the remaining real Stripe scenario executors, followed by hosted deployment and a real Stripe Sandbox acceptance run.
 
 ## What is actually implemented
 
@@ -24,6 +24,7 @@ The next priority is long-lived resumable event streaming and the remaining scen
 - Durable exactly-once merchant effects and a worker-written verification assertion in the persisted report.
 - Webhook ingress atomically persists/deduplicates and enqueues a sanitized `stripe.webhook.received` projection. The durable worker consumes it, requires an exact PaymentIntent plus ParityLab-correlation match, derives the tenant only from the matched run, and atomically records terminal processing state, one API-visible run event, and one status-neutral report assertion.
 - Webhook processing is restart-safe and idempotent: exact replay creates no second job/evidence; unsupported types become durable `ignored`, unmatched or missing-correlation events become durable `unmatched`, malformed internal jobs fail terminally, and transient storage failures retain bounded retry behavior. Raw signed bodies are neither persisted nor logged.
+- Tenant/public-safe SSE reads persisted events in bounded PostgreSQL batches, uses stable sequence IDs, strictly validates `Last-Event-ID`, replays only missed evidence, emits retry/heartbeat/completion frames, and remains open for later webhook/worker evidence. Sliding per-stream write deadlines preserve the API server's ordinary slow-client timeout.
 
 ### Authentication, tenancy, and protected resources
 
@@ -44,6 +45,7 @@ The next priority is long-lived resumable event streaming and the remaining scen
 - Project settings, environment selection, finding resolution/reopen, and notification read/read-all controls persist through protected APIs and refresh shared shell state. Fixtures still use `Seeded preview` or `Simulated data` and are never labeled live.
 - Functional command palette, navigation, account/notification controls, filters, exports, printing, copy actions, onboarding, connection checks, and mobile `More`/account menus.
 - A 310svh pinned forensic marketing narrative driven by scroll progress, stateful event braid, chapter activation, premium hover/entry transitions, mobile linearization, and reduced-motion fallback.
+- The live run detail bootstraps from the JSON ledger and then uses a credentialed native `EventSource`. Newly appended durable evidence is sequence-deduplicated, ordered, animated into the ledger, and accompanied by honest connecting/live/reconnecting status.
 - Responsive Pixel 7 product layout, keyboard navigation, axe serious/critical checks, and visible provenance at all supported viewport sizes.
 
 ## Exact green evidence from this worktree
@@ -64,6 +66,8 @@ The next priority is long-lived resumable event streaming and the remaining scen
 - `pnpm audit --prod` — no known vulnerabilities after upgrading Next.js to 16.2.11 and overriding the inherited Sharp/libvips chain to 0.35.3 in response to the final audit.
 - `govulncheck ./...` — no reachable Go vulnerabilities after upgrading `golang.org/x/text` to 0.39.0 (and its compatible `x/sync` dependency) to repair the scanner's reachable PostgreSQL parsing trace.
 - `PARITYLAB_CONFIRM_FRESH=1 tests/scripts/webhook-consumer-restart.sh` — exit 0 with `webhook consumer restart contract passed for run_000004`; proved API-restart ingress durability, tenant-safe object/correlation matching, one visible event/assertion, worker-restart replay, changed-body conflict, terminal ignored/unmatched/poison outcomes, raw-body absence, secret-log absence, and scoped cleanup.
+- `PARITYLAB_CONFIRM_FRESH=1 tests/scripts/sse-restart-reconnect.sh` — exit 0 with `SSE restart and reconnect contract passed for run_000004 through sequence 10`; proved exact replay 1–9, heartbeat/retry/completion framing, API restart, zero replay after reconnect at 9, live webhook append 10 on the same stream, tenant isolation, strict cursor errors, no duplicate sequences, and secret/raw-body absence.
+- Production-built Chromium persisted-state suite — 8/8 passed, including the run detail appending a mocked durable event exactly once while retaining sequence order.
 
 See `docs/VERIFICATION.md` and `docs/WORKSTREAMS/*.md` for the command ledger and lane-level evidence.
 
@@ -71,7 +75,6 @@ See `docs/VERIFICATION.md` and `docs/WORKSTREAMS/*.md` for the command ledger an
 
 - No real Stripe account was contacted in this run because the user has not supplied local Sandbox credentials. The official SDK path is proven with a strict local Stripe server, not falsely reported as a live Stripe run.
 - Only the PaymentIntent duplicate-delivery path has the complete real-adapter + durable-worker + merchant-assertion vertical. Remaining refund, subscription/Test Clock, reorder, timeout, and tamper scenario executors are not fully connected to real Stripe objects.
-- The SSE endpoint replays persisted events and completion; it is not yet a database-backed long-lived append subscription with `Last-Event-ID` recovery.
 - Authentication currently supports one owner organization/project created at registration. Invitations, multi-project switching, password reset/email verification, MFA/passkeys, session-management UI, and automated encryption-key rotation are not implemented.
 - The in-process login limiter is bounded and tested but is not yet a shared distributed limiter for a multi-instance deployment.
 - WebKit authenticated acceptance is locally green. The broader full-route WebKit matrix, k6/load, hosted backup/recovery, penetration testing, and two clean hosted CI runs remain outstanding.

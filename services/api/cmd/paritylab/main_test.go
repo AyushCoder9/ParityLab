@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"testing"
 )
 
@@ -53,5 +54,16 @@ func TestInsecureCookiesRequireLoopbackHTTPOrigin(t *testing.T) {
 	t.Setenv("PARITYLAB_INSECURE_COOKIES", "false")
 	if insecure, err := configuredCookiePolicy("https://paritylab.example"); err != nil || insecure {
 		t.Fatalf("secure default insecure=%v err=%v", insecure, err)
+	}
+}
+
+func TestHTTPServerAllowsLongLivedStreamsWithBoundedReadTimeouts(t *testing.T) {
+	t.Parallel()
+	server := newHTTPServer(":0", http.NotFoundHandler())
+	if server.WriteTimeout <= 0 {
+		t.Fatalf("ordinary responses lost their slow-client write bound: %s", server.WriteTimeout)
+	}
+	if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.IdleTimeout <= 0 {
+		t.Fatalf("server timeouts are not bounded: %+v", server)
 	}
 }

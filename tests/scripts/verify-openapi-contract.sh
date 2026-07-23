@@ -21,5 +21,9 @@ require '^  /v1/stripe/payment-intents:' 'Stripe PaymentIntent verification endp
 require '^      operationId: createStripePaymentIntentRun$' 'Stripe PaymentIntent operation ID'
 require 'amount_minor: \{ type: integer, minimum: 1, maximum: 99999999 \}' 'integer minor-unit constraint'
 require "currency: \{ type: string, pattern: '\^\[a-z\]\{3\}" 'lowercase ISO currency constraint'
+require '^  /v1/runs/\{id\}/events:' 'run event stream endpoint'
+require '^      operationId: getRunEvents$' 'run event stream operation ID'
+require 'name: Last-Event-ID\n          in: header' 'resumable SSE cursor header'
+require 'text/event-stream:' 'SSE response media type'
 
 echo "OpenAPI product contract validation passed"

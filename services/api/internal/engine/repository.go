@@ -58,6 +58,12 @@ type WebhookProcessingResult struct {
 	AlreadyProcessed bool
 }
 
+type EventStreamBatch struct {
+	Run       domain.Run
+	Events    []domain.Event
+	HighWater int
+}
+
 // BuildWebhookRunEvent creates the sanitized evidence projected into the
 // existing run event API after a durable correlation succeeds.
 func BuildWebhookRunEvent(receipt WebhookReceipt, runID string, sequence int) domain.Event {
@@ -159,6 +165,7 @@ type Repository interface {
 	CreateRun(context.Context, [sha256.Size]byte, [sha256.Size]byte, RunBundle) (domain.Run, bool, error)
 	Run(context.Context, string) (domain.Run, bool, error)
 	Events(context.Context, string) ([]domain.Event, bool, error)
+	EventsAfter(context.Context, string, int, int) (EventStreamBatch, bool, error)
 	Report(context.Context, string) (domain.Report, bool, error)
 	ListRuns(context.Context) ([]domain.Run, error)
 	MarkWebhookSeen(context.Context, WebhookReceipt) (bool, error)
@@ -184,6 +191,7 @@ type TenantRepository interface {
 	CreateRunForProject(context.Context, string, [sha256.Size]byte, [sha256.Size]byte, RunBundle) (domain.Run, bool, error)
 	RunForProject(context.Context, string, string) (domain.Run, bool, error)
 	EventsForProject(context.Context, string, string) ([]domain.Event, bool, error)
+	EventsAfterForProject(context.Context, string, string, int, int) (EventStreamBatch, bool, error)
 	ReportForProject(context.Context, string, string) (domain.Report, bool, error)
 	ListRunsForProject(context.Context, string) ([]domain.Run, error)
 	SaveStripeConnectionForProject(context.Context, string, StripeConnection) (StripeConnection, error)
@@ -194,6 +202,7 @@ type TenantRepository interface {
 type PublicRepository interface {
 	PublicRun(context.Context, string) (domain.Run, bool, error)
 	PublicEvents(context.Context, string) ([]domain.Event, bool, error)
+	PublicEventsAfter(context.Context, string, int, int) (EventStreamBatch, bool, error)
 	PublicReport(context.Context, string) (domain.Report, bool, error)
 	ListPublicRuns(context.Context) ([]domain.Run, error)
 }

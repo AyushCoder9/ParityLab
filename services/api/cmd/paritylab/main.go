@@ -97,11 +97,7 @@ func run() error {
 		Auth:            authService,
 		InsecureCookies: insecureCookies,
 	})
-	server := &http.Server{
-		Addr: envOr("API_ADDRESS", ":8080"), Handler: handler,
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
-		WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
-	}
+	server := newHTTPServer(envOr("API_ADDRESS", ":8080"), handler)
 	serveError := make(chan error, 1)
 	go func() {
 		slog.Info("ParityLab API listening", "address", server.Addr, "mode", "sandbox", "persistence", persistence)
@@ -117,6 +113,18 @@ func run() error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
+	}
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr: address, Handler: handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		// SSE refreshes a shorter per-write deadline through ResponseController;
+		// ordinary responses retain this global slow-client bound.
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 }
 

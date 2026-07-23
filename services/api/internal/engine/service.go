@@ -154,6 +154,14 @@ func (s *Service) EventsForProject(projectID, id string) ([]domain.Event, bool) 
 	return events, found && err == nil
 }
 
+func (s *Service) EventsAfterForProject(ctx context.Context, projectID, id string, after, limit int) (EventStreamBatch, bool, error) {
+	repo, ok := s.repo.(TenantRepository)
+	if !ok {
+		return EventStreamBatch{}, false, errors.New("tenant event storage unavailable")
+	}
+	return repo.EventsAfterForProject(ctx, projectID, id, after, limit)
+}
+
 func (s *Service) ReportForProject(projectID, id string) (domain.Report, bool) {
 	repo, ok := s.repo.(TenantRepository)
 	if !ok {
@@ -193,6 +201,14 @@ func (s *Service) PublicEvents(id string) ([]domain.Event, bool) {
 	return events, found && err == nil
 }
 
+func (s *Service) PublicEventsAfter(ctx context.Context, id string, after, limit int) (EventStreamBatch, bool, error) {
+	repo, ok := s.repo.(PublicRepository)
+	if !ok {
+		return EventStreamBatch{}, false, errors.New("public event storage unavailable")
+	}
+	return repo.PublicEventsAfter(ctx, id, after, limit)
+}
+
 func (s *Service) PublicReport(id string) (domain.Report, bool) {
 	repo, ok := s.repo.(PublicRepository)
 	if !ok {
@@ -205,6 +221,10 @@ func (s *Service) PublicReport(id string) (domain.Report, bool) {
 func (s *Service) Run(id string) (domain.Run, bool) {
 	run, ok, err := s.repo.Run(context.Background(), id)
 	return run, ok && err == nil
+}
+
+func (s *Service) EventsAfter(ctx context.Context, id string, after, limit int) (EventStreamBatch, bool, error) {
+	return s.repo.EventsAfter(ctx, id, after, limit)
 }
 
 func (s *Service) Runs() []domain.Run {

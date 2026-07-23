@@ -29,6 +29,10 @@ function apiURL(path: string) {
   return new URL(path, API_ORIGIN).toString();
 }
 
+export function getRunEventStreamURL(id: string) {
+  return apiURL(API_PATHS.events(id));
+}
+
 export type StripeConnectionSummary = StripeConnection;
 
 export type ProjectSettings = {

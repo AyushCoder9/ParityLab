@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,10 +186,26 @@ func TestCreateRunRejectsInvalidInput(t *testing.T) {
 
 func TestEventStream(t *testing.T) {
 	t.Parallel()
-	req := httptest.NewRequest(http.MethodGet, "/v1/runs/run_000001/events", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/run_000001/events", nil).WithContext(ctx)
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
-	testHandler().ServeHTTP(rec, req)
+	rec := newStreamRecorder("event: run.complete")
+	done := make(chan struct{})
+	go func() {
+		testHandler().ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-rec.matched:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not replay events and completion")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not stop after cancellation")
+	}
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("status=%d content-type=%s", rec.Code, rec.Header().Get("Content-Type"))
 	}
@@ -205,6 +222,24 @@ func TestEventStream(t *testing.T) {
 	}
 	if eventLines < 2 {
 		t.Fatalf("expected streamed events, got %d", eventLines)
+	}
+}
+
+type streamRecorder struct {
+	*httptest.ResponseRecorder
+	match   string
+	matched chan struct{}
+	once    sync.Once
+}
+
+func newStreamRecorder(match string) *streamRecorder {
+	return &streamRecorder{ResponseRecorder: httptest.NewRecorder(), match: match, matched: make(chan struct{})}
+}
+
+func (r *streamRecorder) Flush() {
+	r.ResponseRecorder.Flush()
+	if strings.Contains(r.Body.String(), r.match) {
+		r.once.Do(func() { close(r.matched) })
 	}
 }
 

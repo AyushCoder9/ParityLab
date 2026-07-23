@@ -80,11 +80,10 @@ The opt-in Stripe vertical E2E requires the isolated strict Stripe mock stack do
 
 ## Next implementation order
 
-1. Convert replay-only SSE to long-lived database event streaming with reconnect/`Last-Event-ID` behavior.
-2. Complete real Stripe refund and subscription/Test Clock scenario executors plus worker restart tests; expose the already-tested reorder, timeout, and tamper relay modes through persisted scenario configuration.
-3. Add the next identity/operations layer: invitations or project switching, password recovery/verification, shared distributed throttling, key rotation, metrics/tracing, and administrative dead-letter replay.
-4. Deploy web/API/worker/PostgreSQL with HTTPS webhook ingress, secret management, telemetry, backups, rate limits, and incident drills.
-5. Run the final real Stripe Sandbox acceptance flow after the user places test credentials in ignored local files.
+1. Complete real Stripe refund and subscription/Test Clock scenario executors plus worker restart tests; expose the already-tested reorder, timeout, and tamper relay modes through persisted scenario configuration.
+2. Add the next identity/operations layer: invitations or project switching, password recovery/verification, shared distributed throttling, key rotation, metrics/tracing, and administrative dead-letter replay.
+3. Deploy web/API/worker/PostgreSQL with HTTPS webhook ingress, secret management, telemetry, backups, rate limits, and incident drills.
+4. Run the final real Stripe Sandbox acceptance flow after the user places test credentials in ignored local files.
 
 ## Workspace truth
 

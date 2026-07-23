@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | Deterministic simulation | Node test runner: fixture order, divergence/convergence, progress bounds | 3/3 pass |
 | Go domain engine | Seeded overview, validation, replay/conflict, fault timelines, concurrent dedupe | Pass in Go 1.26 container |
-| HTTP API | Health, overview, scenarios, runs, JSON/SSE events, reports, CORS, body limits, request IDs | Pass |
+| HTTP API | Health, overview, scenarios, runs, JSON/resumable long-lived SSE events, reports, CORS, body limits, request IDs | Pass |
 | Webhook security | Valid/stale/tampered/live payloads, raw-body HMAC, redaction, event dedupe | Unit and live contract pass |
 | Marketing narrative | Entry CTAs, duplicate injection, architecture keyboard controls | Chromium and mobile Chromium pass |
 | Guided simulation | Story/Explore controls, timeline, evidence, sandbox label, real API run ID | Chromium and mobile Chromium pass |

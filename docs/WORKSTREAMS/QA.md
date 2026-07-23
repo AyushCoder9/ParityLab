@@ -81,6 +81,22 @@ The accessibility matrix now covers every static product route and checks narrow
 9. malformed internal jobs become permanent poison-job failures while transient failures retain retry behavior; and
 10. persisted projections and logs contain neither raw webhook bodies nor fixture PII/secrets.
 
+## Resumable SSE acceptance
+
+`tests/scripts/sse-restart-reconnect.sh` owns only the dedicated Compose project `paritylab-sse-reconnect-contract`, requires `PARITYLAB_CONFIRM_FRESH=1`, and cleans only its named containers, network, and volumes. The final stable-backend run printed `SSE restart and reconnect contract passed for run_000004 through sequence 10` and proved:
+
+1. authenticated tenant A can stream its run while anonymous access and tenant B receive 404;
+2. malformed, duplicate, and ahead `Last-Event-ID` values receive the documented 400 errors before streaming starts;
+3. the first connection replays exactly sequences 1–9 with no gaps or duplicates, valid JSON data frames, `retry: 2000`, one completion frame, and a heartbeat while still open;
+4. the API can stop and restart without losing the event ledger or session;
+5. reconnecting with sequence 9 produces zero replayed event frames and remains alive through a heartbeat;
+6. a later signed Stripe webhook is consumed and sequence 10 arrives on that same open connection;
+7. the combined initial/reconnected ledgers are exactly sequences 1–10 with no duplicates;
+8. raw webhook sentinels, credentials, and fixture passwords are absent from stream output and service logs; and
+9. cleanup leaves no resources in the dedicated Compose project.
+
+The production-built Chromium persisted-state suite passed 8/8. Its streaming contract bootstrapped one JSON event, appended a streamed second event, and rendered that sequence exactly once; the other seven protected mutation, onboarding, Stripe handoff, run-creation, and provenance contracts remained green.
+
 ## CI gates
 
 - `build-test`: lint, typecheck, unit tests, race-enabled Go tests, and production builds.
@@ -88,6 +104,7 @@ The accessibility matrix now covers every static product route and checks narrow
 - `contract`: public API and signed webhook contracts.
 - `persistence`: fresh PostgreSQL plus API-restart durability contract.
 - `auth-persistence`: hardened sessions, tenant isolation, protected Stripe/resources, and API-restart durability on a separate fresh stack.
+- `sse-persistence`: authenticated resume, API restart, live webhook append, framing, cursor validation, and stream secrecy on a separate fresh stack.
 - `compose`: dependency configuration and startup health.
 
 ## Integration coordination
@@ -110,6 +127,7 @@ PARITYLAB_STRIPE_VERTICAL_E2E=1 pnpm --filter @paritylab/e2e exec playwright tes
 PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh
 PARITYLAB_CONFIRM_FRESH=1 tests/scripts/auth-resource-restart.sh
 PARITYLAB_CONFIRM_FRESH=1 tests/scripts/webhook-consumer-restart.sh
+PARITYLAB_CONFIRM_FRESH=1 tests/scripts/sse-restart-reconnect.sh
 tests/scripts/verify-openapi-contract.sh
 tests/scripts/verify-config.sh
 sh -n tests/scripts/*.sh

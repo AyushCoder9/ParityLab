@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Finding, Report, Run, RunEvent, Scenario as EngineScenario } from "@paritylab/contracts";
 import { Icon, StatusPill } from "@paritylab/ui";
-import { checkEngine, createEngineRun, createStripePaymentIntentRun, getConnections, getEngineReport, getEngineRun, getEngineRunEvents, getEngineRuns, getEngineScenarios, getEnvironments, getFindings, getNotifications, getProjectSettings, markAllNotificationsRead, markNotificationRead, reopenFinding, resolveFinding, selectEnvironment, updateProjectSettings, validateStripeConnection, type Environment, type Notification, type StripeConnectionSummary } from "@/lib/api";
+import { checkEngine, createEngineRun, createStripePaymentIntentRun, getConnections, getEngineReport, getEngineRun, getEngineRunEvents, getEngineRuns, getEngineScenarios, getEnvironments, getFindings, getNotifications, getProjectSettings, getRunEventStreamURL, markAllNotificationsRead, markNotificationRead, reopenFinding, resolveFinding, selectEnvironment, updateProjectSettings, validateStripeConnection, type Environment, type Notification, type StripeConnectionSummary } from "@/lib/api";
 import { scenarios } from "@/lib/simulation";
 import { formatRelativeDate, seededRuns } from "@/lib/product-data";
 import { DataNotice, LoadingStrip, ProductHeading } from "./dashboard";
@@ -70,14 +70,35 @@ export function RunDetailPage({ id }: { id: string }) {
   const [run, setRun] = useState<Run>(fallback);
   const [events, setEvents] = useState<RunEvent[]>(seededEvents(fallback));
   const [mode, setMode] = useState<"loading" | "live" | "seeded">("seeded");
+  const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [copied, setCopied] = useState(false);
   useEffect(() => { const controller = new AbortController(); Promise.all([getEngineRun(id, controller.signal), getEngineRunEvents(id, controller.signal)]).then(([liveRun, response]) => { setRun(liveRun); setEvents(response.data); setMode("live"); }).catch(() => setMode("seeded")); return () => controller.abort(); }, [id]);
+  useEffect(() => {
+    if (mode !== "live" || typeof EventSource === "undefined") return;
+    setStreamState("connecting");
+    const stream = new EventSource(getRunEventStreamURL(id), { withCredentials: true });
+    stream.onopen = () => setStreamState("live");
+    stream.onerror = () => setStreamState("reconnecting");
+    stream.addEventListener("run.event", (message) => {
+      try {
+        const next = JSON.parse((message as MessageEvent<string>).data) as RunEvent;
+        setEvents((current) => {
+          if (!Number.isInteger(next.sequence) || next.run_id !== id || current.some((item) => item.sequence === next.sequence)) return current;
+          return [...current, next].sort((left, right) => left.sequence - right.sequence);
+        });
+      } catch {
+        setStreamState("reconnecting");
+      }
+    });
+    return () => stream.close();
+  }, [id, mode]);
   const exportEvidence = () => downloadJSON(`${run.id}-evidence.json`, { source: mode, run, events });
   const copyID = async () => { await navigator.clipboard.writeText(run.id); setCopied(true); window.setTimeout(() => setCopied(false), 1500); };
-  return <div className="product-page"><Link href="/runs" className="back-link">← Back to runs</Link><ProductHeading eyebrow={run.id} title={run.scenario_name} description="Follow the complete event path, inspect checkpoints, and export the evidence used for the verdict." actions={<><button className="button button--secondary" onClick={copyID}>{copied ? "Copied" : "Copy run ID"}</button><button className="button button--primary" onClick={exportEvidence}><Icon name="report"/> Export JSON</button></>} />{mode === "loading" ? <LoadingStrip /> : mode === "seeded" ? <DataNotice /> : <div className="data-notice data-notice--live"><span className="live-dot"/><strong>Live run evidence</strong><span>Loaded from the engine.</span></div>}
+  const streamLabel = streamState === "live" ? "Streaming persisted evidence" : streamState === "reconnecting" ? "Reconnecting to evidence stream…" : "Connecting to evidence stream…";
+  return <div className="product-page"><Link href="/runs" className="back-link">← Back to runs</Link><ProductHeading eyebrow={run.id} title={run.scenario_name} description="Follow the complete event path, inspect checkpoints, and export the evidence used for the verdict." actions={<><button className="button button--secondary" onClick={copyID}>{copied ? "Copied" : "Copy run ID"}</button><button className="button button--primary" onClick={exportEvidence}><Icon name="report"/> Export JSON</button></>} />{mode === "loading" ? <LoadingStrip /> : mode === "seeded" ? <DataNotice /> : <div className="data-notice data-notice--live"><span className={`live-dot live-dot--${streamState}`}/><strong>Live run evidence</strong><span role="status" aria-live="polite">{streamLabel}</span></div>}
     <div className="run-hero"><div><span>Verdict</span><strong><Icon name="check"/> {run.recovered ? "Recovered safely" : "Invariant passed"}</strong></div><div><span>Score</span><strong>{run.score}/100</strong></div><div><span>Business effects</span><strong>Exactly one</strong></div><div><span>Environment</span><strong>Stripe Sandbox</strong></div></div>
     <section className="product-panel topology-detail"><div className="panel-heading"><span>System topology</span><span className="mono">{events.length} checkpoints</span></div><EventBraid mode="verified" compact /></section>
-    <section className="product-panel"><div className="panel-heading"><span>Event ledger</span><span>{mode === "live" ? "Live evidence" : "Seeded evidence"}</span></div><ol className="event-ledger">{events.map((event) => <li key={event.id}><span className={`event-state event-state--${event.status}`} /><time className="mono">{new Date(event.at).toLocaleTimeString()}</time><div><strong>{event.title}</strong><p>{event.detail}</p></div><span>{event.source}</span><code>{event.latency_ms}ms</code></li>)}</ol></section>
+    <section className="product-panel"><div className="panel-heading"><span>Event ledger</span><span>{mode === "live" ? `${events.length} persisted · ${streamState}` : "Seeded evidence"}</span></div><ol className="event-ledger">{events.map((event) => <li key={event.id}><span className={`event-state event-state--${event.status}`} /><time className="mono">{new Date(event.at).toLocaleTimeString()}</time><div><strong>{event.title}</strong><p>{event.detail}</p></div><span>{event.source}</span><code>{event.latency_ms}ms</code></li>)}</ol></section>
   </div>;
 }
 

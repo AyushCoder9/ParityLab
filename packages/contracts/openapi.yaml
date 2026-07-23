@@ -361,10 +361,18 @@ paths:
       - $ref: '#/components/parameters/RunID'
     get:
       operationId: getRunEvents
-      description: Returns JSON by default. Accept text/event-stream to replay run.event messages followed by run.complete.
+      description: Returns JSON by default. With Accept text/event-stream, replays persisted run.event messages after Last-Event-ID, emits the terminal run.complete snapshot once, and keeps the connection open for newly appended durable evidence. Event IDs are stable run-event sequence numbers, so native EventSource reconnects resume without replaying acknowledged events.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Last acknowledged non-negative event sequence. Invalid cursors and cursors ahead of the durable ledger are rejected.
+          schema:
+            type: integer
+            minimum: 0
       responses:
         '200':
-          description: Event list or Server-Sent Events stream
+          description: Event list or resumable long-lived Server-Sent Events stream
           content:
             application/json:
               schema:
@@ -377,6 +385,7 @@ paths:
                         items: { $ref: '#/components/schemas/Event' }
             text/event-stream:
               schema: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
   /v1/runs/{id}/report:
     parameters:

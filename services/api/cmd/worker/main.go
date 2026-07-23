@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,6 +33,21 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if port := os.Getenv("PORT"); port != "" {
+		// Render's free tier only offers "Web Service" instances; a background
+		// worker has no HTTP-serving requirement of its own but binds $PORT so
+		// the platform treats this process as a Web Service instead of the
+		// paid-only Background Worker type.
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			if err := http.ListenAndServe(":"+port, mux); err != nil {
+				slog.Warn("worker health server stopped", "error", err)
+			}
+		}()
+	}
 	repository, err := postgresadapter.Open(ctx, databaseURL, envOr("PARITYLAB_MIGRATIONS_DIR", "db/migrations"))
 	if err != nil {
 		return err

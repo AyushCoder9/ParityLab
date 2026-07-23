@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: paritylab-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: services/api/cmd/paritylab/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_ENDPOINT_TOKEN
+        value: demo
+      - key: PARITYLAB_ENCRYPTION_KEY
+        sync: false
+      - key: AUTH_SECRET
+        sync: false
+      - key: PARITYLAB_SIGNING_SECRET
+        sync: false
+      - key: WEB_ORIGIN
+        sync: false
+
+  - type: web
+    name: paritylab-worker
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: services/api/cmd/worker/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: PARITYLAB_SIGNING_SECRET
+        sync: false

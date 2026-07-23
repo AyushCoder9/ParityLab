@@ -28,8 +28,10 @@ type MemoryRepository struct {
 	idempotency         map[[sha256.Size]byte]memoryIdempotencyRecord
 	tenantIdempotency   map[string]memoryIdempotencyRecord
 	projectByRun        map[string]string
+	correlationByRun    map[string]string
 	projectByConnection map[string]string
 	webhooks            map[string]WebhookReceipt
+	webhookResults      map[string]WebhookProcessingResult
 	connections         map[string]StripeConnection
 	nextRun             int
 	outbox              map[string]memoryOutbox
@@ -49,9 +51,10 @@ func NewMemoryRepository() *MemoryRepository {
 		runs: make(map[string]domain.Run), events: make(map[string][]domain.Event),
 		reports: make(map[string]domain.Report), idempotency: make(map[[sha256.Size]byte]memoryIdempotencyRecord),
 		tenantIdempotency: make(map[string]memoryIdempotencyRecord), projectByRun: make(map[string]string),
-		projectByConnection: make(map[string]string),
-		webhooks:            make(map[string]WebhookReceipt), connections: make(map[string]StripeConnection), nextRun: 4,
-		outbox: make(map[string]memoryOutbox), nextOutbox: 1, merchantEffects: make(map[string]int),
+		correlationByRun: make(map[string]string), projectByConnection: make(map[string]string),
+		webhooks: make(map[string]WebhookReceipt), webhookResults: make(map[string]WebhookProcessingResult),
+		connections: make(map[string]StripeConnection), nextRun: 4, outbox: make(map[string]memoryOutbox),
+		nextOutbox: 1, merchantEffects: make(map[string]int),
 	}
 }
 
@@ -86,6 +89,7 @@ func (r *MemoryRepository) CreateRunForProject(_ context.Context, projectID stri
 	r.events[bundle.Run.ID] = cloneEvents(bundle.Events)
 	r.reports[bundle.Run.ID] = bundle.Report
 	r.projectByRun[bundle.Run.ID] = projectID
+	r.correlationByRun[bundle.Run.ID] = bundle.StripeCorrelationID
 	r.tenantIdempotency[key] = memoryIdempotencyRecord{requestHash: requestHash, runID: bundle.Run.ID}
 	r.enqueueLocked(bundle)
 	return bundle.Run, false, nil
@@ -193,6 +197,7 @@ func (r *MemoryRepository) CreateRun(_ context.Context, keyHash, requestHash [sh
 	r.runs[bundle.Run.ID] = bundle.Run
 	r.events[bundle.Run.ID] = cloneEvents(bundle.Events)
 	r.reports[bundle.Run.ID] = bundle.Report
+	r.correlationByRun[bundle.Run.ID] = bundle.StripeCorrelationID
 	r.idempotency[keyHash] = memoryIdempotencyRecord{requestHash: requestHash, runID: bundle.Run.ID}
 	r.enqueueLocked(bundle)
 	return bundle.Run, false, nil
@@ -251,6 +256,92 @@ func (r *MemoryRepository) MarkWebhookSeen(_ context.Context, receipt WebhookRec
 	payload, _ := json.Marshal(map[string]string{"stripe_event_id": receipt.EventID, "event_type": receipt.EventType})
 	r.putOutboxLocked("stripe.webhook.received", receipt.EventID, payload)
 	return false, nil
+}
+
+func (r *MemoryRepository) ProcessStripeWebhook(_ context.Context, eventID string) (WebhookProcessingResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if previous, ok := r.webhookResults[eventID]; ok {
+		previous.AlreadyProcessed = true
+		return previous, nil
+	}
+	receipt, ok := r.webhooks[eventID]
+	if !ok {
+		return WebhookProcessingResult{}, errors.New("webhook receipt not found")
+	}
+	result := WebhookProcessingResult{EventID: receipt.EventID, EventType: receipt.EventType, Status: WebhookPending}
+	if !IsSupportedStripeWebhookType(receipt.EventType) {
+		result.Status = WebhookIgnored
+		result.ProcessingCode = "unsupported_event_type"
+		r.webhookResults[eventID] = result
+		return result, nil
+	}
+	if receipt.StripeObjectID == "" {
+		result.Status = WebhookUnmatched
+		result.ProcessingCode = "missing_stripe_object_id"
+		r.webhookResults[eventID] = result
+		return result, nil
+	}
+	if receipt.CorrelationID == "" {
+		result.Status = WebhookUnmatched
+		result.ProcessingCode = "missing_correlation_id"
+		r.webhookResults[eventID] = result
+		return result, nil
+	}
+	objectMatches := make([]string, 0, 1)
+	correlatedMatches := make([]string, 0, 1)
+	for runID, run := range r.runs {
+		if run.StripeObjectID != receipt.StripeObjectID {
+			continue
+		}
+		objectMatches = append(objectMatches, runID)
+		if r.correlationByRun[runID] == receipt.CorrelationID {
+			correlatedMatches = append(correlatedMatches, runID)
+		}
+	}
+	if len(objectMatches) == 0 {
+		result.Status = WebhookUnmatched
+		result.ProcessingCode = "run_not_found"
+		r.webhookResults[eventID] = result
+		return result, nil
+	}
+	if len(correlatedMatches) == 0 {
+		result.Status = WebhookUnmatched
+		result.ProcessingCode = "correlation_mismatch"
+		r.webhookResults[eventID] = result
+		return result, nil
+	}
+	if len(correlatedMatches) > 1 {
+		result.Status = WebhookUnmatched
+		result.ProcessingCode = "ambiguous_run_match"
+		r.webhookResults[eventID] = result
+		return result, nil
+	}
+	runID := correlatedMatches[0]
+	run := r.runs[runID]
+	events := r.events[runID]
+	nextSequence := 1
+	for _, existing := range events {
+		if existing.Sequence >= nextSequence {
+			nextSequence = existing.Sequence + 1
+		}
+	}
+	event := BuildWebhookRunEvent(receipt, runID, nextSequence)
+	r.events[runID] = append(events, event)
+	run.EventCount = len(r.events[runID])
+	r.runs[runID] = run
+	report := r.reports[runID]
+	report.Run = run
+	if !HasAssertion(report.Assertions, "assert_stripe_webhook_correlated") {
+		report.Assertions = append(report.Assertions, WebhookCorrelationAssertion(receipt))
+		report.Summary = fmt.Sprintf("%d of %d verification assertions passed.", passedCount(report.Assertions), len(report.Assertions))
+	}
+	r.reports[runID] = report
+	result.Status = WebhookMatched
+	result.RunID = runID
+	result.ProjectID = r.projectByRun[runID]
+	r.webhookResults[eventID] = result
+	return result, nil
 }
 
 func (r *MemoryRepository) Close() error { return nil }

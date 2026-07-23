@@ -27,6 +27,14 @@ type Worker struct {
 	config Config
 }
 
+type permanentJobError struct {
+	code string
+	err  error
+}
+
+func (e *permanentJobError) Error() string { return e.err.Error() }
+func (e *permanentJobError) Unwrap() error { return e.err }
+
 func New(repo engine.Repository, relay *verification.Relay, config Config) *Worker {
 	if config.ID == "" {
 		config.ID = "worker-local"
@@ -63,7 +71,10 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
-	message, ok, err := w.repo.ClaimOutbox(ctx, w.config.ID, w.config.Lease, []string{"verification.run.queued"})
+	message, ok, err := w.repo.ClaimOutbox(ctx, w.config.ID, w.config.Lease, []string{
+		"verification.run.queued",
+		"stripe.webhook.received",
+	})
 	if err != nil || !ok {
 		return false, err
 	}
@@ -73,11 +84,15 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if processErr == nil {
 		return true, w.repo.CompleteOutbox(ctx, message.ID, w.config.ID)
 	}
+	var permanent *permanentJobError
+	if errors.As(processErr, &permanent) {
+		return true, w.repo.FailOutbox(ctx, message.ID, w.config.ID, permanent.code)
+	}
 	if message.Attempts >= w.config.MaxAttempts {
-		return true, w.repo.FailOutbox(ctx, message.ID, w.config.ID, "verification_failed")
+		return true, w.repo.FailOutbox(ctx, message.ID, w.config.ID, workerErrorCode(message.Topic, false))
 	}
 	delay := retryDelay(message.Attempts)
-	return true, w.repo.RetryOutbox(ctx, message.ID, w.config.ID, delay, "verification_retry")
+	return true, w.repo.RetryOutbox(ctx, message.ID, w.config.ID, delay, workerErrorCode(message.Topic, true))
 }
 
 func (w *Worker) withHeartbeat(ctx context.Context, message engine.OutboxMessage, operation func(context.Context) error) error {
@@ -118,9 +133,17 @@ func (w *Worker) withHeartbeat(ctx context.Context, message engine.OutboxMessage
 }
 
 func (w *Worker) process(ctx context.Context, message engine.OutboxMessage) error {
-	if message.Topic != "verification.run.queued" {
+	switch message.Topic {
+	case "verification.run.queued":
+		return w.processVerification(ctx, message)
+	case "stripe.webhook.received":
+		return w.processStripeWebhook(ctx, message)
+	default:
 		return nil
 	}
+}
+
+func (w *Worker) processVerification(ctx context.Context, message engine.OutboxMessage) error {
 	var payload struct {
 		RunID string `json:"run_id"`
 	}
@@ -148,6 +171,33 @@ func (w *Worker) process(ctx context.Context, message engine.OutboxMessage) erro
 			Evidence: verification.ContractVersion,
 		},
 	})
+}
+
+func (w *Worker) processStripeWebhook(ctx context.Context, message engine.OutboxMessage) error {
+	var payload struct {
+		StripeEventID string `json:"stripe_event_id"`
+		EventType     string `json:"event_type"`
+	}
+	if err := json.Unmarshal(message.Payload, &payload); err != nil ||
+		payload.StripeEventID == "" || payload.EventType == "" ||
+		payload.StripeEventID != message.AggregateID {
+		return &permanentJobError{code: "webhook_job_invalid", err: errors.New("invalid Stripe webhook job payload")}
+	}
+	_, err := w.repo.ProcessStripeWebhook(ctx, payload.StripeEventID)
+	return err
+}
+
+func workerErrorCode(topic string, retry bool) string {
+	if topic == "stripe.webhook.received" {
+		if retry {
+			return "webhook_processing_retry"
+		}
+		return "webhook_processing_failed"
+	}
+	if retry {
+		return "verification_retry"
+	}
+	return "verification_failed"
 }
 
 func retryDelay(attempt int) time.Duration {

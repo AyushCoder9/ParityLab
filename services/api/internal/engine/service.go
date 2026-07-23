@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -226,12 +227,54 @@ func (s *Service) Report(id string) (domain.Report, bool) {
 
 // RecordWebhook stores hashes and non-sensitive envelope metadata only.
 func (s *Service) RecordWebhook(eventID, eventType, endpointToken string, body []byte) (bool, error) {
+	var envelope struct {
+		Created int64 `json:"created"`
+		Data    struct {
+			Object struct {
+				ID       string            `json:"id"`
+				Status   string            `json:"status"`
+				Metadata map[string]string `json:"metadata"`
+			} `json:"object"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(body, &envelope)
 	receipt := WebhookReceipt{
 		EventID: eventID, EventType: eventType,
 		EndpointTokenSHA: sha256.Sum256([]byte(endpointToken)),
 		BodySHA:          sha256.Sum256(body),
+		StripeObjectID:   safeWebhookIdentifier(envelope.Data.Object.ID, "pi_", 255),
+		ObjectStatus:     safeWebhookStatus(envelope.Data.Object.Status),
+		CorrelationID:    safeWebhookIdentifier(envelope.Data.Object.Metadata["paritylab_correlation_id"], "plcorr_", 128),
+	}
+	if envelope.Created > 0 {
+		receipt.StripeCreatedAt = time.Unix(envelope.Created, 0).UTC()
 	}
 	return s.repo.MarkWebhookSeen(context.Background(), receipt)
+}
+
+func safeWebhookIdentifier(value, prefix string, maxLength int) string {
+	if len(value) == 0 || len(value) > maxLength || !strings.HasPrefix(value, prefix) {
+		return ""
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '_' && char != '-' {
+			return ""
+		}
+	}
+	return value
+}
+
+func safeWebhookStatus(value string) string {
+	if len(value) > 64 {
+		return ""
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && char != '_' {
+			return ""
+		}
+	}
+	return value
 }
 
 // MarkWebhookSeen remains for existing engine consumers and tests.

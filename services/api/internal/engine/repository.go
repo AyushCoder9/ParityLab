@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/domain"
@@ -17,10 +19,11 @@ var ErrWebhookConflict = errors.New("webhook event id reused with different payl
 // The run, evidence, report, idempotency response, and outbox message must either
 // all commit or all roll back.
 type RunBundle struct {
-	Run         domain.Run
-	Events      []domain.Event
-	Report      domain.Report
-	OutboxTopic string
+	Run                 domain.Run
+	Events              []domain.Event
+	Report              domain.Report
+	OutboxTopic         string
+	StripeCorrelationID string
 }
 
 // WebhookReceipt deliberately contains only the minimum metadata needed for
@@ -30,6 +33,96 @@ type WebhookReceipt struct {
 	EventType        string
 	EndpointTokenSHA [sha256.Size]byte
 	BodySHA          [sha256.Size]byte
+	StripeCreatedAt  time.Time
+	StripeObjectID   string
+	ObjectStatus     string
+	CorrelationID    string
+}
+
+type WebhookProcessingStatus string
+
+const (
+	WebhookPending   WebhookProcessingStatus = "pending"
+	WebhookMatched   WebhookProcessingStatus = "matched"
+	WebhookUnmatched WebhookProcessingStatus = "unmatched"
+	WebhookIgnored   WebhookProcessingStatus = "ignored"
+)
+
+type WebhookProcessingResult struct {
+	EventID          string
+	EventType        string
+	Status           WebhookProcessingStatus
+	RunID            string
+	ProjectID        string
+	ProcessingCode   string
+	AlreadyProcessed bool
+}
+
+// BuildWebhookRunEvent creates the sanitized evidence projected into the
+// existing run event API after a durable correlation succeeds.
+func BuildWebhookRunEvent(receipt WebhookReceipt, runID string, sequence int) domain.Event {
+	digest := sha256.Sum256([]byte(receipt.EventID))
+	occurredAt := receipt.StripeCreatedAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	return domain.Event{
+		ID:         "stripe_webhook_" + hex.EncodeToString(digest[:12]),
+		RunID:      runID,
+		Sequence:   sequence,
+		At:         occurredAt,
+		Source:     "stripe",
+		Target:     "webhook-ingress",
+		Type:       receipt.EventType,
+		Title:      "Stripe webhook correlated",
+		Detail:     "A verified sandbox event was correlated to this run using sanitized Stripe metadata.",
+		Status:     domain.EventHealthy,
+		Checkpoint: "stripe-webhook",
+		TraceID:    "stripe-event-" + hex.EncodeToString(digest[:8]),
+		Evidence: map[string]any{
+			"stripe_event_id":              receipt.EventID,
+			"stripe_event_type":            receipt.EventType,
+			"stripe_payment_intent_id":     receipt.StripeObjectID,
+			"stripe_payment_intent_status": receipt.ObjectStatus,
+			"paritylab_correlation_id":     receipt.CorrelationID,
+		},
+	}
+}
+
+// WebhookCorrelationAssertion is intentionally status-neutral so delivery
+// order cannot change the report verdict.
+func WebhookCorrelationAssertion(receipt WebhookReceipt) domain.Assertion {
+	return domain.Assertion{
+		ID:       "assert_stripe_webhook_correlated",
+		Name:     "Verified Stripe webhook correlated to the originating run",
+		Passed:   true,
+		Expected: "matching PaymentIntent and ParityLab correlation metadata",
+		Observed: "PaymentIntent and correlation metadata matched",
+		Evidence: fmt.Sprintf("stripe_object:%s", receipt.StripeObjectID),
+	}
+}
+
+// HasAssertion reports whether an assertion projection is already present.
+func HasAssertion(assertions []domain.Assertion, id string) bool {
+	for _, assertion := range assertions {
+		if assertion.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func IsSupportedStripeWebhookType(eventType string) bool {
+	switch eventType {
+	case "payment_intent.created",
+		"payment_intent.processing",
+		"payment_intent.succeeded",
+		"payment_intent.payment_failed",
+		"payment_intent.canceled":
+		return true
+	default:
+		return false
+	}
 }
 
 type StripeConnection struct {
@@ -69,6 +162,7 @@ type Repository interface {
 	Report(context.Context, string) (domain.Report, bool, error)
 	ListRuns(context.Context) ([]domain.Run, error)
 	MarkWebhookSeen(context.Context, WebhookReceipt) (bool, error)
+	ProcessStripeWebhook(context.Context, string) (WebhookProcessingResult, error)
 	SaveStripeConnection(context.Context, StripeConnection) (StripeConnection, error)
 	StripeConnection(context.Context, string) (StripeConnection, bool, error)
 	ClaimOutbox(context.Context, string, time.Duration, []string) (OutboxMessage, bool, error)

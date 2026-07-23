@@ -142,12 +142,14 @@ func (r *Repository) createRun(ctx context.Context, projectID *string, scope str
 		INSERT INTO runs (
 			id, scenario_id, scenario_name, fault, status, score, environment,
 			stripe_object_id, merchant_order_id, started_at, completed_at,
-			duration_ms, event_count, finding_count, recovered, snapshot, project_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+			duration_ms, event_count, finding_count, recovered, snapshot,
+			stripe_correlation_id, project_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 	`, bundle.Run.ID, bundle.Run.ScenarioID, bundle.Run.ScenarioName, bundle.Run.Fault,
 		bundle.Run.Status, bundle.Run.Score, bundle.Run.Environment, bundle.Run.StripeObjectID,
 		bundle.Run.MerchantOrderID, bundle.Run.StartedAt, bundle.Run.CompletedAt,
-		bundle.Run.DurationMS, bundle.Run.EventCount, bundle.Run.FindingCount, bundle.Run.Recovered, runJSON, projectID)
+		bundle.Run.DurationMS, bundle.Run.EventCount, bundle.Run.FindingCount, bundle.Run.Recovered,
+		runJSON, nullableString(bundle.StripeCorrelationID), projectID)
 	if err != nil {
 		return domain.Run{}, false, fmt.Errorf("insert run: %w", err)
 	}
@@ -442,10 +444,13 @@ func (r *Repository) MarkWebhookSeen(ctx context.Context, receipt engine.Webhook
 	defer func() { _ = tx.Rollback(ctx) }()
 	command, err := tx.Exec(ctx, `
 		INSERT INTO webhook_events (
-			stripe_event_id, endpoint_token_hash, event_type, livemode, body_sha256
-		) VALUES ($1,$2,$3,false,$4)
+			stripe_event_id, endpoint_token_hash, event_type, livemode, body_sha256,
+			stripe_created_at, stripe_object_id, object_status, paritylab_correlation_id
+		) VALUES ($1,$2,$3,false,$4,$5,$6,$7,$8)
 		ON CONFLICT (stripe_event_id) DO NOTHING
-	`, receipt.EventID, receipt.EndpointTokenSHA[:], receipt.EventType, receipt.BodySHA[:])
+	`, receipt.EventID, receipt.EndpointTokenSHA[:], receipt.EventType, receipt.BodySHA[:],
+		nullableTime(receipt.StripeCreatedAt), nullableString(receipt.StripeObjectID),
+		nullableString(receipt.ObjectStatus), nullableString(receipt.CorrelationID))
 	if err != nil {
 		return false, err
 	}
@@ -485,6 +490,257 @@ func (r *Repository) MarkWebhookSeen(ctx context.Context, receipt engine.Webhook
 		return false, err
 	}
 	return true, nil
+}
+
+func (r *Repository) ProcessStripeWebhook(ctx context.Context, eventID string) (engine.WebhookProcessingResult, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var receipt engine.WebhookReceipt
+	var processingStatus string
+	var processingCode *string
+	var correlatedRunID *string
+	var correlatedProjectID *string
+	var stripeCreatedAt *time.Time
+	var stripeObjectID *string
+	var objectStatus *string
+	var correlationID *string
+	err = tx.QueryRow(ctx, `
+		SELECT event_type, processing_status, processing_error_code,
+			correlated_run_id, correlated_project_id::text, stripe_created_at,
+			stripe_object_id, object_status, paritylab_correlation_id
+		FROM webhook_events
+		WHERE stripe_event_id = $1
+		FOR UPDATE
+	`, eventID).Scan(
+		&receipt.EventType, &processingStatus, &processingCode,
+		&correlatedRunID, &correlatedProjectID, &stripeCreatedAt,
+		&stripeObjectID, &objectStatus, &correlationID,
+	)
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	receipt.EventID = eventID
+	if stripeCreatedAt != nil {
+		receipt.StripeCreatedAt = stripeCreatedAt.UTC()
+	}
+	if stripeObjectID != nil {
+		receipt.StripeObjectID = *stripeObjectID
+	}
+	if objectStatus != nil {
+		receipt.ObjectStatus = *objectStatus
+	}
+	if correlationID != nil {
+		receipt.CorrelationID = *correlationID
+	}
+	if processingStatus != string(engine.WebhookPending) {
+		result := engine.WebhookProcessingResult{
+			EventID: eventID, EventType: receipt.EventType,
+			Status: engine.WebhookProcessingStatus(processingStatus), AlreadyProcessed: true,
+		}
+		if processingCode != nil {
+			result.ProcessingCode = *processingCode
+		}
+		if correlatedRunID != nil {
+			result.RunID = *correlatedRunID
+		}
+		if correlatedProjectID != nil {
+			result.ProjectID = *correlatedProjectID
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return engine.WebhookProcessingResult{}, err
+		}
+		return result, nil
+	}
+
+	if !engine.IsSupportedStripeWebhookType(receipt.EventType) {
+		return finishWebhookProcessing(ctx, tx, receipt, engine.WebhookIgnored, "", "", "unsupported_event_type")
+	}
+	if receipt.StripeObjectID == "" {
+		return finishWebhookProcessing(ctx, tx, receipt, engine.WebhookUnmatched, "", "", "missing_stripe_object_id")
+	}
+	if receipt.CorrelationID == "" {
+		return finishWebhookProcessing(ctx, tx, receipt, engine.WebhookUnmatched, "", "", "missing_correlation_id")
+	}
+
+	type runCandidate struct {
+		id            string
+		projectID     string
+		correlationID string
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, COALESCE(project_id::text, ''), COALESCE(stripe_correlation_id, '')
+		FROM runs
+		WHERE stripe_object_id = $1
+		ORDER BY id
+		FOR UPDATE
+	`, receipt.StripeObjectID)
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	candidates := make([]runCandidate, 0, 2)
+	for rows.Next() {
+		var candidate runCandidate
+		if err := rows.Scan(&candidate.id, &candidate.projectID, &candidate.correlationID); err != nil {
+			rows.Close()
+			return engine.WebhookProcessingResult{}, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return engine.WebhookProcessingResult{}, err
+	}
+	rows.Close()
+	if len(candidates) == 0 {
+		return finishWebhookProcessing(ctx, tx, receipt, engine.WebhookUnmatched, "", "", "run_not_found")
+	}
+	matches := make([]runCandidate, 0, 1)
+	for _, candidate := range candidates {
+		if candidate.correlationID == receipt.CorrelationID {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 0 {
+		return finishWebhookProcessing(ctx, tx, receipt, engine.WebhookUnmatched, "", "", "correlation_mismatch")
+	}
+	if len(matches) != 1 {
+		return finishWebhookProcessing(ctx, tx, receipt, engine.WebhookUnmatched, "", "", "ambiguous_run_match")
+	}
+	match := matches[0]
+
+	var runJSON []byte
+	if err := tx.QueryRow(ctx, `SELECT snapshot FROM runs WHERE id = $1 FOR UPDATE`, match.id).Scan(&runJSON); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	var run domain.Run
+	if err := json.Unmarshal(runJSON, &run); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	var nextSequence int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(max(sequence), 0) + 1 FROM run_events WHERE run_id = $1
+	`, match.id).Scan(&nextSequence); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	runEvent := engine.BuildWebhookRunEvent(receipt, match.id, nextSequence)
+	eventJSON, err := json.Marshal(runEvent)
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	eventEvidenceJSON, err := json.Marshal(runEvent.Evidence)
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO run_events (
+			id, run_id, sequence, event_type, source, target, status, checkpoint,
+			trace_id, latency_ms, evidence, occurred_at, title, detail, is_duplicate, snapshot
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+	`, runEvent.ID, runEvent.RunID, runEvent.Sequence, runEvent.Type, runEvent.Source,
+		runEvent.Target, runEvent.Status, runEvent.Checkpoint, runEvent.TraceID,
+		runEvent.LatencyMS, eventEvidenceJSON, runEvent.At, runEvent.Title, runEvent.Detail,
+		runEvent.IsDuplicate, eventJSON); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM run_events WHERE run_id = $1`, match.id).Scan(&run.EventCount); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	runJSON, err = json.Marshal(run)
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE runs SET event_count = $2, snapshot = $3 WHERE id = $1
+	`, match.id, run.EventCount, runJSON); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+
+	var reportJSON []byte
+	if err := tx.QueryRow(ctx, `SELECT snapshot FROM reports WHERE run_id = $1 FOR UPDATE`, match.id).Scan(&reportJSON); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	var report domain.Report
+	if err := json.Unmarshal(reportJSON, &report); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	report.Run = run
+	assertion := engine.WebhookCorrelationAssertion(receipt)
+	if !engine.HasAssertion(report.Assertions, assertion.ID) {
+		report.Assertions = append(report.Assertions, assertion)
+		report.Summary = fmt.Sprintf("%d of %d verification assertions passed.", countPassed(report.Assertions), len(report.Assertions))
+		evidenceJSON, marshalErr := json.Marshal(map[string]string{
+			"reference": assertion.Evidence, "checkpoint": "stripe-webhook",
+		})
+		if marshalErr != nil {
+			return engine.WebhookProcessingResult{}, marshalErr
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO assertions (id, run_id, name, passed, expected, observed, evidence)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			ON CONFLICT (run_id, id) DO NOTHING
+		`, assertion.ID, match.id, assertion.Name, assertion.Passed,
+			assertion.Expected, assertion.Observed, evidenceJSON); err != nil {
+			return engine.WebhookProcessingResult{}, err
+		}
+	}
+	reportJSON, err = json.Marshal(report)
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	reportDigest := sha256.Sum256(reportJSON)
+	if _, err := tx.Exec(ctx, `
+		UPDATE reports SET snapshot = $2, content_sha256 = $3 WHERE run_id = $1
+	`, match.id, reportJSON, reportDigest[:]); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO stripe_webhook_evidence (
+			stripe_event_id, run_id, project_id, event_type, stripe_object_id,
+			object_status, paritylab_correlation_id, run_event_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (stripe_event_id) DO NOTHING
+	`, receipt.EventID, match.id, nullableString(match.projectID), receipt.EventType,
+		receipt.StripeObjectID, receipt.ObjectStatus, receipt.CorrelationID, runEvent.ID); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	return finishWebhookProcessing(ctx, tx, receipt, engine.WebhookMatched, match.id, match.projectID, "")
+}
+
+func finishWebhookProcessing(
+	ctx context.Context,
+	tx pgx.Tx,
+	receipt engine.WebhookReceipt,
+	status engine.WebhookProcessingStatus,
+	runID string,
+	projectID string,
+	processingCode string,
+) (engine.WebhookProcessingResult, error) {
+	command, err := tx.Exec(ctx, `
+		UPDATE webhook_events SET
+			processing_status = $2,
+			correlated_run_id = $3,
+			correlated_project_id = $4,
+			processed_at = now(),
+			processing_error_code = $5
+		WHERE stripe_event_id = $1 AND processing_status = 'pending'
+	`, receipt.EventID, status, nullableString(runID), nullableString(projectID), nullableString(processingCode))
+	if err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return engine.WebhookProcessingResult{}, errors.New("webhook processing state changed")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return engine.WebhookProcessingResult{}, err
+	}
+	return engine.WebhookProcessingResult{
+		EventID: receipt.EventID, EventType: receipt.EventType, Status: status,
+		RunID: runID, ProjectID: projectID, ProcessingCode: processingCode,
+	}, nil
 }
 
 const (
@@ -791,6 +1047,20 @@ func (r *Repository) ApplyReferenceMerchantEffect(ctx context.Context, effectID 
 }
 
 type rowScanner interface{ Scan(...any) error }
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
 
 func scanRun(row rowScanner) (domain.Run, bool, error) {
 	var raw []byte

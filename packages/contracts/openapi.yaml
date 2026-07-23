@@ -460,7 +460,7 @@ paths:
   /hooks/stripe/{endpoint_token}:
     post:
       operationId: ingestStripeWebhook
-      description: Verifies Stripe-Signature against the untouched body and rejects livemode events.
+      description: Verifies Stripe-Signature against the untouched body, rejects livemode events, and atomically queues a sanitized projection for tenant-safe run correlation. Raw webhook bodies are not persisted.
       parameters:
         - name: endpoint_token
           in: path
@@ -477,7 +477,7 @@ paths:
             schema: { type: object, additionalProperties: true }
       responses:
         '200':
-          description: Quickly acknowledged, including whether this event identifier was already seen.
+          description: Durably acknowledged before asynchronous processing, including whether this exact event identifier and body were already seen.
           content:
             application/json:
               schema:

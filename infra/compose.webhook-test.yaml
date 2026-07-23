@@ -1,0 +1,88 @@
+name: paritylab-webhook-consumer-test
+
+services:
+  postgres-webhook-test:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: paritylab
+      POSTGRES_USER: paritylab
+      POSTGRES_PASSWORD: paritylab_webhook_test_only
+    volumes:
+      - postgres-webhook-test-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paritylab -d paritylab"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  stripe-webhook-mock:
+    image: node:24-alpine
+    working_dir: /src
+    command: ["node", "tests/mocks/stripe-server.mjs"]
+    environment:
+      PORT: "12111"
+    volumes:
+      - ../:/src:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:12111/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  api-webhook-test:
+    image: golang:1.26-alpine
+    working_dir: /src
+    command: ["go", "run", "./services/api/cmd/paritylab"]
+    environment:
+      DATABASE_URL: postgres://paritylab:paritylab_webhook_test_only@postgres-webhook-test:5432/paritylab?sslmode=disable
+      PARITYLAB_MIGRATIONS_DIR: /src/db/migrations
+      API_ADDRESS: ":8080"
+      WEB_ORIGIN: "${PARITYLAB_WEBHOOK_WEB_ORIGIN:-http://127.0.0.1:3204}"
+      PARITYLAB_INSECURE_COOKIES: "true"
+      PARITYLAB_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      PARITYLAB_ALLOW_STRIPE_MOCK: "true"
+      STRIPE_API_BASE: http://stripe-webhook-mock:12111
+      STRIPE_WEBHOOK_SECRET: whsec_webhook_consumer_contract
+      STRIPE_ENDPOINT_TOKEN: webhook-contract
+    ports:
+      - "${PARITYLAB_WEBHOOK_API_PORT:-18086}:8080"
+    volumes:
+      - ../:/src:ro
+      - go-webhook-test-cache:/root/.cache/go-build
+      - go-webhook-mod-cache:/go/pkg/mod
+    depends_on:
+      postgres-webhook-test:
+        condition: service_healthy
+      stripe-webhook-mock:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --output-document=/dev/null http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 180
+    restart: "no"
+
+  worker-webhook-test:
+    image: golang:1.26-alpine
+    working_dir: /src
+    command: ["go", "run", "./services/api/cmd/worker"]
+    environment:
+      DATABASE_URL: postgres://paritylab:paritylab_webhook_test_only@postgres-webhook-test:5432/paritylab?sslmode=disable
+      PARITYLAB_MIGRATIONS_DIR: /src/db/migrations
+      PARITYLAB_SIGNING_SECRET: webhook-consumer-reference-signing-secret
+      PARITYLAB_WORKER_ID: webhook-consumer-contract-worker
+    volumes:
+      - ../:/src:ro
+      - go-webhook-test-cache:/root/.cache/go-build
+      - go-webhook-mod-cache:/go/pkg/mod
+    depends_on:
+      postgres-webhook-test:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres-webhook-test-data:
+  go-webhook-test-cache:
+  go-webhook-mod-cache:

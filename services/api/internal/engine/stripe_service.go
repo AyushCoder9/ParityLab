@@ -204,6 +204,7 @@ func (s *StripeService) createPaymentIntentRun(ctx context.Context, projectID, c
 	scenario, _ := scenarioByID(seededScenarios(), "checkout-duplicate")
 	bundle := buildRunBundle(id, numberFromRunID(id), scenario, domain.FaultDuplicate, s.now().UTC())
 	bundle.OutboxTopic = "verification.run.queued"
+	bundle.StripeCorrelationID = correlationID
 	bundle.Run.StripeObjectID = intent.ID
 	for index := range bundle.Events {
 		bundle.Events[index].Evidence["amount_minor"] = amountMinor

@@ -109,9 +109,17 @@ The API and worker are intentionally separate processes. The API remains latency
 - Webhook tests prove first delivery enqueues exactly one `stripe.webhook.received` message while exact replay enqueues none.
 - Environment-gated PostgreSQL worker integration is available through `TEST_DATABASE_URL`: it migrates, creates a Stripe-shaped queued run without external credentials, executes the worker, and reads the durable assertion from the report.
 
+### Webhook correlation expansion
+
+- Migration `000007_webhook_correlation` adds the sanitized webhook projection, processing state, correlation evidence, and uniqueness constraints required for durable replay-safe consumption.
+- Signed ingress stores only the event creation time, event/object identifiers, allowlisted status, exact `paritylab_correlation_id`, event type, and body hash. Raw webhook bodies and arbitrary metadata are not persisted.
+- The worker claims both verification and webhook topics. A supported PaymentIntent event is matched only by exact object ID plus a non-empty exact correlation ID, and the tenant is derived exclusively from the already-owned run.
+- A successful match atomically creates one API-visible run event, one status-neutral report assertion, one normalized assertion, one webhook-evidence row, and the terminal processing state. Retrying after a crash or worker restart cannot duplicate those effects.
+- Unsupported event types become terminal `ignored`; missing, unknown, mismatched, or ambiguous correlations become terminal `unmatched`. Malformed internal payloads become permanent failures, while transient repository failures retain the outbox retry contract.
+- Verification jobs retain their previous behavior and unknown topics are not falsely published.
+
 ### Remaining Phase 3 gaps
 
-- `stripe.webhook.received` is durably queued and safely acknowledged at HTTP ingress, but its domain processor/correlation into an active run is not implemented yet. The verification worker filters claims to `verification.run.queued`, so webhook and unknown topics remain pending for their future dedicated consumer and are never falsely marked published.
 - The reference merchant is a bundled contract adapter backed by ParityLab PostgreSQL, not yet a separately deployable example merchant HTTP service.
 - Only duplicate relay execution is wired into queued Stripe runs. Reorder, timeout, and tamper are implemented/tested at the versioned relay layer but are not yet selectable through persisted scenario configuration.
 - Report enrichment is idempotent but mutates the preliminary report snapshot. A later state-machine slice must keep runs `running` until grading and emit the immutable final report only once.

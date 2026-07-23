@@ -66,6 +66,21 @@ The accessibility matrix now covers every static product route and checks narrow
 
 `tests/e2e/specs/auth-security.spec.ts` covers sanitized cookies/session responses, missing/invalid sessions, CSRF, logout revocation, tenant isolation, and login throttling through Playwright’s API client. `tests/e2e/specs/auth-product.spec.ts` covers protected-route redirect/return destination, generic login failure, registration into the intended protected screen, no JavaScript credential storage, logout, and explicit session-check outage UI. Together with `state-boundaries.spec.ts`, the integrated fresh-stack run passed Chromium 17/17 in 11.6 seconds and WebKit 17/17 in 27.5 seconds.
 
+## Webhook consumer acceptance
+
+`tests/scripts/webhook-consumer-restart.sh` owns only the dedicated Compose project `paritylab-webhook-consumer-contract`, requires `PARITYLAB_CONFIRM_FRESH=1`, and removes only that project and its dedicated volumes. The passing run printed `webhook consumer restart contract passed for run_000004` and proves:
+
+1. a signed PaymentIntent webhook is acknowledged only after its sanitized receipt and outbox job are committed;
+2. API restart before worker execution does not lose the queued webhook;
+3. exact PaymentIntent ID plus exact non-empty correlation ID resolves the tenant from the existing run;
+4. one matched webhook creates exactly one evidence row, one API-visible event, and one report assertion;
+5. worker restart and exact webhook replay do not duplicate any visible or normalized effect;
+6. a changed body under the same Stripe event ID receives a conflict instead of overwriting the original receipt;
+7. unsupported event types terminate as ignored;
+8. missing, unknown, or mismatched correlation terminates as unmatched without cross-tenant attachment;
+9. malformed internal jobs become permanent poison-job failures while transient failures retain retry behavior; and
+10. persisted projections and logs contain neither raw webhook bodies nor fixture PII/secrets.
+
 ## CI gates
 
 - `build-test`: lint, typecheck, unit tests, race-enabled Go tests, and production builds.
@@ -94,6 +109,7 @@ pnpm --filter @paritylab/e2e exec playwright test specs/auth-product.spec.ts spe
 PARITYLAB_STRIPE_VERTICAL_E2E=1 pnpm --filter @paritylab/e2e exec playwright test specs/stripe-vertical.spec.ts --project=chromium --workers=1
 PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh
 PARITYLAB_CONFIRM_FRESH=1 tests/scripts/auth-resource-restart.sh
+PARITYLAB_CONFIRM_FRESH=1 tests/scripts/webhook-consumer-restart.sh
 tests/scripts/verify-openapi-contract.sh
 tests/scripts/verify-config.sh
 sh -n tests/scripts/*.sh

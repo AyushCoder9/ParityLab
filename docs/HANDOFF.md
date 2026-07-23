@@ -62,6 +62,9 @@ PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh
 
 # Destructive only to its separate dedicated auth test project/volumes
 PARITYLAB_CONFIRM_FRESH=1 tests/scripts/auth-resource-restart.sh
+
+# Destructive only to its dedicated webhook-consumer project/volumes
+PARITYLAB_CONFIRM_FRESH=1 tests/scripts/webhook-consumer-restart.sh
 ```
 
 Browser tests can use external servers:
@@ -77,12 +80,11 @@ The opt-in Stripe vertical E2E requires the isolated strict Stripe mock stack do
 
 ## Next implementation order
 
-1. Add a dedicated `stripe.webhook.received` consumer that correlates Stripe events to active tenant runs and records processing state.
-2. Convert replay-only SSE to long-lived database event streaming with reconnect/`Last-Event-ID` behavior.
-3. Complete real Stripe refund and subscription/Test Clock scenario executors plus worker restart tests; expose the already-tested reorder, timeout, and tamper relay modes through persisted scenario configuration.
-4. Add the next identity/operations layer: invitations or project switching, password recovery/verification, shared distributed throttling, key rotation, metrics/tracing, and administrative dead-letter replay.
-5. Deploy web/API/worker/PostgreSQL with HTTPS webhook ingress, secret management, telemetry, backups, rate limits, and incident drills.
-6. Run the final real Stripe Sandbox acceptance flow after the user places test credentials in ignored local files.
+1. Convert replay-only SSE to long-lived database event streaming with reconnect/`Last-Event-ID` behavior.
+2. Complete real Stripe refund and subscription/Test Clock scenario executors plus worker restart tests; expose the already-tested reorder, timeout, and tamper relay modes through persisted scenario configuration.
+3. Add the next identity/operations layer: invitations or project switching, password recovery/verification, shared distributed throttling, key rotation, metrics/tracing, and administrative dead-letter replay.
+4. Deploy web/API/worker/PostgreSQL with HTTPS webhook ingress, secret management, telemetry, backups, rate limits, and incident drills.
+5. Run the final real Stripe Sandbox acceptance flow after the user places test credentials in ignored local files.
 
 ## Workspace truth
 

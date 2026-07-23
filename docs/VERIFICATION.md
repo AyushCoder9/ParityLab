@@ -141,4 +141,16 @@ git diff --check
 
 The final production audit initially identified newly published advisories affecting Next.js 16.2.10 and Next's inherited Sharp 0.34.5/libvips path. Next.js was upgraded to 16.2.11 and the workspace now overrides Sharp to 0.35.3; `pnpm audit --prod` then returned `No known vulnerabilities found`. `govulncheck ./...` also found a reachable `golang.org/x/text` 0.29.0 issue through PostgreSQL connection parsing; upgrading `x/text` to 0.39.0 and the compatible `x/sync` dependency produced `No vulnerabilities found`. `make verify`, `go vet ./...`, `go test -race ./...`, configuration/OpenAPI checks, shell syntax, and diff checks all remained green after those dependency repairs.
 
-The authenticated UI static gates, E2E TypeScript validation, isolated auth/restart contract, and integrated Chromium/WebKit browser contracts are green. No real Stripe account was contacted; the Stripe portion used the strict local mock. The webhook-domain consumer, remaining real scenario executors, long-lived database-backed SSE, and hosted deployment are still unfinished.
+The authenticated UI static gates, E2E TypeScript validation, isolated auth/restart contract, and integrated Chromium/WebKit browser contracts are green. No real Stripe account was contacted; the Stripe portion used the strict local mock. Remaining real scenario executors, long-lived database-backed SSE, and hosted deployment are still unfinished.
+
+## Durable webhook consumer
+
+Date: 2026-07-23
+
+```bash
+PARITYLAB_CONFIRM_FRESH=1 tests/scripts/webhook-consumer-restart.sh
+```
+
+The dedicated `paritylab-webhook-consumer-contract` stack passed with `webhook consumer restart contract passed for run_000004`. It proved signed-ingress durability across an API restart, exact tenant-safe PaymentIntent/correlation matching, one visible event/evidence/assertion effect, worker-restart and delivery-replay idempotency, changed-body conflict handling, terminal ignored and unmatched classifications, poison-job isolation, and absence of raw webhook bodies, fixture PII, and secrets from persisted projections and logs.
+
+The PostgreSQL worker integration passed 2/2, including restart/replay behavior. Targeted worker and repository tests, `make verify`, `go vet ./...`, `go test -race ./...`, production dependency audits, `govulncheck`, configuration/OpenAPI validation, shell syntax, and `git diff --check` were all green after the consumer landed.

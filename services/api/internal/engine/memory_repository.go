@@ -469,6 +469,7 @@ func (r *MemoryRepository) enqueueLocked(bundle RunBundle) {
 	payload, _ := json.Marshal(map[string]any{
 		"run_id": bundle.Run.ID, "scenario_id": bundle.Run.ScenarioID,
 		"status": bundle.Run.Status, "environment": bundle.Run.Environment,
+		"verification_fault": bundle.VerificationFault,
 	})
 	r.putOutboxLocked(topic, bundle.Run.ID, payload)
 }

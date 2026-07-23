@@ -23,6 +23,7 @@ The next priority is the remaining real Stripe scenario executors, followed by h
 - Versioned HMAC-signed reference-merchant contract and controlled healthy/duplicate/reorder/timeout/tamper relay behavior.
 - Durable exactly-once merchant effects and a worker-written verification assertion in the persisted report.
 - Webhook ingress atomically persists/deduplicates and enqueues a sanitized `stripe.webhook.received` projection. The durable worker consumes it, requires an exact PaymentIntent plus ParityLab-correlation match, derives the tenant only from the matched run, and atomically records terminal processing state, one API-visible run event, and one status-neutral report assertion.
+- Persisted scenario runs also flow through the same worker relay contract via `run.persisted`, so duplicate, reorder, timeout, and tamper modes now leave durable verification evidence instead of only living in the scenario catalog.
 - Webhook processing is restart-safe and idempotent: exact replay creates no second job/evidence; unsupported types become durable `ignored`, unmatched or missing-correlation events become durable `unmatched`, malformed internal jobs fail terminally, and transient storage failures retain bounded retry behavior. Raw signed bodies are neither persisted nor logged.
 - Tenant/public-safe SSE reads persisted events in bounded PostgreSQL batches, uses stable sequence IDs, strictly validates `Last-Event-ID`, replays only missed evidence, emits retry/heartbeat/completion frames, and remains open for later webhook/worker evidence. Sliding per-stream write deadlines preserve the API server's ordinary slow-client timeout.
 
@@ -52,6 +53,7 @@ The next priority is the remaining real Stripe scenario executors, followed by h
 
 - `make verify && go vet ./... && git diff --check` — exit 0; includes frontend lint/typecheck/unit tests, all Go tests, 15-route production build, and both API/worker builds.
 - `go test -race ./...` — all API, repository, Stripe adapter, verification, worker, and contract packages passed under the race detector.
+- `go test ./...` — repo-wide Go packages passed after wiring persisted scenario runs through the worker relay contract.
 - `PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh` — exit 0 on a fresh isolated PostgreSQL + API + strict Stripe mock stack; passed for `run_000005` and cleaned its scoped containers/volumes.
 - Chromium full suite against the integrated stack — 50/50 passed before the opt-in test was added.
 - Mobile Chromium final suite — 50 passed, one intentional opt-in skip; targeted mobile portability 7/7 passed.
@@ -74,7 +76,7 @@ See `docs/VERIFICATION.md` and `docs/WORKSTREAMS/*.md` for the command ledger an
 ## Honest limitations / next gates
 
 - No real Stripe account was contacted in this run because the user has not supplied local Sandbox credentials. The official SDK path is proven with a strict local Stripe server, not falsely reported as a live Stripe run.
-- Only the PaymentIntent duplicate-delivery path has the complete real-adapter + durable-worker + merchant-assertion vertical. Remaining refund, subscription/Test Clock, reorder, timeout, and tamper scenario executors are not fully connected to real Stripe objects.
+- The real Stripe adapter is only wired for the PaymentIntent path. Refund, subscription/Test Clock, and other real-Stripe scenario executors are still not connected to live Sandbox objects.
 - Authentication currently supports one owner organization/project created at registration. Invitations, multi-project switching, password reset/email verification, MFA/passkeys, session-management UI, and automated encryption-key rotation are not implemented.
 - The in-process login limiter is bounded and tested but is not yet a shared distributed limiter for a multi-instance deployment.
 - WebKit authenticated acceptance is locally green. The broader full-route WebKit matrix, k6/load, hosted backup/recovery, penetration testing, and two clean hosted CI runs remain outstanding.

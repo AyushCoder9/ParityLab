@@ -131,7 +131,7 @@ The API and worker are intentionally separate processes. The API remains latency
 ### Remaining Phase 3 gaps
 
 - The reference merchant is a bundled contract adapter backed by ParityLab PostgreSQL, not yet a separately deployable example merchant HTTP service.
-- Only duplicate relay execution is wired into queued Stripe runs. Reorder, timeout, and tamper are implemented/tested at the versioned relay layer but are not yet selectable through persisted scenario configuration.
+- Persisted scenario runs now feed the verification relay through `run.persisted`, and duplicate, reorder, timeout, and tamper modes are selected from the stored run fault. The remaining gap is real Stripe refund and subscription/Test Clock executors plus broader production ops.
 - Report enrichment is idempotent but mutates the preliminary report snapshot. A later state-machine slice must keep runs `running` until grading and emit the immutable final report only once.
 - Worker metrics, OpenTelemetry spans, administrative dead-letter replay, and per-project concurrency/rate limits remain to be added.
 

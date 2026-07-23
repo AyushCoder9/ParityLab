@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/domain"
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/verification"
 )
 
 var demoEpoch = time.Date(2026, time.July, 18, 9, 30, 0, 0, time.UTC)
@@ -384,7 +385,7 @@ func buildRunBundle(id string, number int, scenario domain.Scenario, fault domai
 	if fault == domain.FaultTamper {
 		run.Status = domain.RunFailed
 	}
-	return RunBundle{Run: run, Events: events, Report: buildReport(run, fault)}
+	return RunBundle{Run: run, Events: events, Report: buildReport(run, fault), VerificationFault: verification.Fault(fault)}
 }
 
 func runID(number int) string { return fmt.Sprintf("run_%06d", number) }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/domain"
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/engine"
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/secrets"
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/verification"
@@ -23,6 +24,19 @@ func (workerStripeGateway) ValidateAccount(context.Context, string) (engine.Stri
 
 func (workerStripeGateway) CreatePaymentIntent(_ context.Context, _ string, input engine.StripePaymentIntentParams) (engine.StripePaymentIntent, error) {
 	return engine.StripePaymentIntent{ID: "pi_worker", Status: "succeeded", Amount: input.AmountMinor, Currency: input.Currency}, nil
+}
+
+func drainSeedPersistedOutbox(t *testing.T, repository engine.Repository) {
+	t.Helper()
+	for range 3 {
+		message, ok, err := repository.ClaimOutbox(context.Background(), "seed-drain", time.Minute, []string{"run.persisted"})
+		if err != nil || !ok {
+			t.Fatalf("drain ok=%v err=%v", ok, err)
+		}
+		if err := repository.CompleteOutbox(context.Background(), message.ID, "seed-drain"); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestQueuedStripeRunIsClaimedAndVerifiedExactlyOnce(t *testing.T) {
@@ -87,25 +101,88 @@ func TestExpiredLeaseCanBeRecoveredByAnotherWorker(t *testing.T) {
 	}
 }
 
-func TestWorkerDoesNotAcknowledgeUnhandledOutboxTopic(t *testing.T) {
+func TestPersistedScenarioRunRecordsThePersistedFaultMode(t *testing.T) {
 	t.Parallel()
-	repository := engine.NewMemoryRepository()
-	service, err := engine.NewServiceWithRepository(repository)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name             string
+		scenarioID       string
+		fault            domain.Fault
+		expectedEvidence string
+		expectedObserved string
+		expectedPass     bool
+	}{
+		{
+			name:             "duplicate",
+			scenarioID:       "checkout-duplicate",
+			fault:            domain.FaultDuplicate,
+			expectedEvidence: "paritylab.verification.v1:duplicate",
+			expectedObserved: "fault=duplicate",
+			expectedPass:     true,
+		},
+		{
+			name:             "reorder",
+			scenarioID:       "webhook-disorder",
+			fault:            domain.FaultReorder,
+			expectedEvidence: "paritylab.verification.v1:reorder",
+			expectedObserved: "fault=reorder",
+			expectedPass:     true,
+		},
+		{
+			name:             "timeout",
+			scenarioID:       "endpoint-recovery",
+			fault:            domain.FaultTimeout,
+			expectedEvidence: "paritylab.verification.v1:timeout",
+			expectedObserved: "fault=timeout",
+			expectedPass:     true,
+		},
+		{
+			name:             "tamper",
+			scenarioID:       "webhook-disorder",
+			fault:            domain.FaultTamper,
+			expectedEvidence: "paritylab.verification.v1:tamper",
+			expectedObserved: "fault=tamper",
+			expectedPass:     true,
+		},
 	}
-	_, _, apiErr := service.CreateRun("checkout-duplicate", "duplicate", "unhandled-topic", []byte(`{}`))
-	if apiErr != nil {
-		t.Fatal(apiErr)
-	}
-	signer, _ := verification.NewSigner("unhandled-topic-signing-secret")
-	instance := New(repository, verification.NewRelay(signer, NewRepositoryMerchant(repository, signer)), Config{ID: "verification-only"})
-	if processed, err := instance.RunOnce(context.Background()); err != nil || processed {
-		t.Fatalf("verification worker consumed unsupported topic processed=%v err=%v", processed, err)
-	}
-	message, ok, err := repository.ClaimOutbox(context.Background(), "future-worker", time.Minute, []string{"run.persisted"})
-	if err != nil || !ok || message.Topic != "run.persisted" {
-		t.Fatalf("unknown job was lost message=%+v ok=%v err=%v", message, ok, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repository := engine.NewMemoryRepository()
+			service, err := engine.NewServiceWithRepository(repository)
+			if err != nil {
+				t.Fatal(err)
+			}
+			drainSeedPersistedOutbox(t, repository)
+			body := []byte(`{"scenario_id":"` + tc.scenarioID + `","fault":"` + string(tc.fault) + `"}`)
+			run, _, apiErr := service.CreateRun(tc.scenarioID, tc.fault, "scenario-"+tc.name, body)
+			if apiErr != nil {
+				t.Fatal(apiErr)
+			}
+			signer, _ := verification.NewSigner("persisted-scenario-signing-secret")
+			instance := New(repository, verification.NewRelay(signer, NewRepositoryMerchant(repository, signer)), Config{ID: "scenario-worker"})
+			processed, err := instance.RunOnce(context.Background())
+			if err != nil || !processed {
+				t.Fatalf("processed=%v err=%v", processed, err)
+			}
+			report, ok, err := repository.Report(context.Background(), run.ID)
+			if err != nil || !ok {
+				t.Fatalf("report ok=%v err=%v", ok, err)
+			}
+			var assertion domain.Assertion
+			found := false
+			for _, item := range report.Assertions {
+				if item.ID == "assert_reference_merchant_exactly_once" {
+					assertion = item
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("verification assertion missing: %+v", report.Assertions)
+			}
+			if assertion.Passed != tc.expectedPass || !strings.Contains(assertion.Evidence, tc.expectedEvidence) || !strings.Contains(assertion.Observed, tc.expectedObserved) {
+				t.Fatalf("assertion=%+v", assertion)
+			}
+		})
 	}
 }
 
@@ -131,6 +208,7 @@ func TestWebhookConsumerCorrelatesOnceAndProjectsSanitizedEvidence(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	drainSeedPersistedOutbox(t, repository)
 	body := []byte(fmt.Sprintf(
 		`{"created":1770000000,"data":{"object":{"id":"%s","status":"succeeded","metadata":{"paritylab_correlation_id":"%s","private":"must-not-persist"}}}}`,
 		run.StripeObjectID, correlationID,
@@ -211,6 +289,7 @@ func TestWebhookConsumerDurablyUnmatchesMissingCorrelationAndIgnoresUnknownType(
 	}
 	signer, _ := verification.NewSigner("webhook-terminal-signing-secret")
 	instance := New(repository, verification.NewRelay(signer, NewRepositoryMerchant(repository, signer)), Config{ID: "webhook-terminal"})
+	drainSeedPersistedOutbox(t, repository)
 	for range 2 {
 		if processed, err := instance.RunOnce(context.Background()); err != nil || !processed {
 			t.Fatalf("processed=%v err=%v", processed, err)

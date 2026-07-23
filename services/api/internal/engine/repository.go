@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/domain"
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/verification"
 )
 
 var ErrIdempotencyConflict = errors.New("idempotency key reused with different parameters")
@@ -24,6 +25,7 @@ type RunBundle struct {
 	Report              domain.Report
 	OutboxTopic         string
 	StripeCorrelationID string
+	VerificationFault   verification.Fault
 }
 
 // WebhookReceipt deliberately contains only the minimum metadata needed for

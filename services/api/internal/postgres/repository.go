@@ -238,6 +238,7 @@ func (r *Repository) createRun(ctx context.Context, projectID *string, scope str
 	outboxPayload, err := json.Marshal(map[string]any{
 		"run_id": bundle.Run.ID, "scenario_id": bundle.Run.ScenarioID,
 		"status": bundle.Run.Status, "environment": "sandbox",
+		"verification_fault": bundle.VerificationFault,
 	})
 	if err != nil {
 		return domain.Run{}, false, err

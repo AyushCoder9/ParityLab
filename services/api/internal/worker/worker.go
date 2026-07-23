@@ -72,6 +72,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	message, ok, err := w.repo.ClaimOutbox(ctx, w.config.ID, w.config.Lease, []string{
+		"run.persisted",
 		"verification.run.queued",
 		"stripe.webhook.received",
 	})
@@ -134,6 +135,8 @@ func (w *Worker) withHeartbeat(ctx context.Context, message engine.OutboxMessage
 
 func (w *Worker) process(ctx context.Context, message engine.OutboxMessage) error {
 	switch message.Topic {
+	case "run.persisted":
+		return w.processVerification(ctx, message)
 	case "verification.run.queued":
 		return w.processVerification(ctx, message)
 	case "stripe.webhook.received":
@@ -145,7 +148,8 @@ func (w *Worker) process(ctx context.Context, message engine.OutboxMessage) erro
 
 func (w *Worker) processVerification(ctx context.Context, message engine.OutboxMessage) error {
 	var payload struct {
-		RunID string `json:"run_id"`
+		RunID             string `json:"run_id"`
+		VerificationFault string `json:"verification_fault"`
 	}
 	if err := json.Unmarshal(message.Payload, &payload); err != nil || payload.RunID == "" {
 		return errors.New("invalid verification job payload")
@@ -154,21 +158,44 @@ func (w *Worker) processVerification(ctx context.Context, message engine.OutboxM
 	if err != nil || !ok {
 		return errors.New("verification run unavailable")
 	}
+	fault := verification.Fault(payload.VerificationFault)
+	if fault == "" {
+		fault = verification.Fault(run.Fault)
+	}
+	if fault == "" {
+		fault = verification.FaultDuplicate
+	}
 	payloadHash := sha256.Sum256([]byte(run.ID + "\n" + run.StripeObjectID + "\n" + run.Environment))
 	result, err := w.relay.Execute(ctx, verification.Delivery{
 		EventID: "verify_" + run.ID, EffectID: "merchant_effect_" + run.ID,
 		RunID: run.ID, Sequence: 1, PayloadHash: hex.EncodeToString(payloadHash[:]),
-	}, verification.FaultDuplicate)
+	}, fault)
 	if err != nil {
 		return err
 	}
-	passed := result.BusinessEffects == 1 && result.Duplicates >= 1 && result.Rejected == 0
+	passed := false
+	expected := "sanitized duplicate, reorder, timeout, or tamper handling"
+	observed := fmt.Sprintf("fault=%s attempts=%d effects=%d duplicates=%d rejected=%d", result.Fault, result.Attempts, result.BusinessEffects, result.Duplicates, result.Rejected)
+	switch result.Fault {
+	case verification.FaultDuplicate, verification.FaultReorder:
+		expected = "one business effect with duplicate suppression"
+		passed = result.BusinessEffects == 1 && result.Duplicates >= 1 && result.Rejected == 0
+	case verification.FaultTimeout:
+		expected = "one business effect after retry"
+		passed = result.BusinessEffects == 1 && result.Rejected == 0
+	case verification.FaultTamper:
+		expected = "blocked before business effect"
+		passed = result.BusinessEffects == 0 && result.Rejected >= 1
+	default:
+		expected = "one business effect"
+		passed = result.BusinessEffects == 1 && result.Rejected == 0
+	}
 	return w.repo.RecordVerification(ctx, engine.VerificationEvidence{
 		RunID: run.ID, Checkpoint: "reference-merchant-v1",
 		Assertion: domain.Assertion{
-			ID: "assert_reference_merchant_exactly_once", Name: "Duplicate delivery creates exactly one reference merchant effect",
-			Passed: passed, Expected: "1 business effect", Observed: fmt.Sprintf("%d business effect(s), %d duplicate(s)", result.BusinessEffects, result.Duplicates),
-			Evidence: verification.ContractVersion,
+			ID: "assert_reference_merchant_exactly_once", Name: "Verification relay converged safely",
+			Passed: passed, Expected: expected, Observed: observed,
+			Evidence: verification.ContractVersion + ":" + string(fault),
 		},
 	})
 }

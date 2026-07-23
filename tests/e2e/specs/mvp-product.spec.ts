@@ -25,7 +25,8 @@ async function expectRealScreen(page: Page, path: string, heading: RegExp) {
 
 test.describe("real product route map", () => {
   for (const [path, heading] of productRoutes) {
-    test(`${path} is a complete screen, not a placeholder`, async ({ page }) => {
+    test(`${path} is a complete screen, not a placeholder`, async ({ context, page }) => {
+      if (path === "/login") await context.clearCookies();
       await expectRealScreen(page, path, heading);
     });
   }

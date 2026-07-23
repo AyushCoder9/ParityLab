@@ -47,6 +47,8 @@ NEXT_PUBLIC_PARITYLAB_API_URL=http://127.0.0.1:8080 pnpm dev
 
 The seeded tour needs no external credentials. A real Stripe path additionally needs an `sk_test_`/restricted `rk_test_` key and `whsec_` webhook secret stored only in local environment/secret storage. Stripe CLI `1.43.8` is installed at `/opt/homebrew/bin/stripe`.
 
+Authentication is API-owned and cookie-based. Production/default startup issues `Secure`, `HttpOnly`, `SameSite=Lax` cookies. For loopback HTTP only, set `PARITYLAB_INSECURE_COOKIES=true`; startup rejects that opt-in when `WEB_ORIGIN` is not loopback. The browser and API origins must match the configured `WEB_ORIGIN` contract.
+
 ## Commands and proof
 
 ```bash
@@ -57,6 +59,9 @@ go vet ./...
 
 # Destructive only to its dedicated test Compose project/volumes
 PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh
+
+# Destructive only to its separate dedicated auth test project/volumes
+PARITYLAB_CONFIRM_FRESH=1 tests/scripts/auth-resource-restart.sh
 ```
 
 Browser tests can use external servers:
@@ -68,18 +73,17 @@ PARITYLAB_API_URL=http://127.0.0.1:8080 \
 pnpm --dir tests/e2e exec playwright test --project=chromium
 ```
 
-The opt-in Stripe vertical E2E requires the isolated strict Stripe mock stack documented in `docs/WORKSTREAMS/QA.md`; set `PARITYLAB_STRIPE_VERTICAL_E2E=1` only against that mock, never against a live endpoint by accident.
+The opt-in Stripe vertical E2E requires the isolated strict Stripe mock stack documented in `docs/WORKSTREAMS/QA.md`; set `PARITYLAB_STRIPE_VERTICAL_E2E=1` only against that mock, never against a live endpoint by accident. The auth restart harness plus Chromium 17/17 and WebKit 17/17 authenticated browser runs are the authoritative integrated results for the new security/resource slice.
 
 ## Next implementation order
 
-1. Add real authentication/session validation, organization/project ownership, tenant-scoped repositories, and protected APIs.
-2. Persist findings/notifications/settings/environments and wire their UI mutations; remove the remaining session-local labels only when proven.
-3. Add a dedicated `stripe.webhook.received` consumer that correlates Stripe events to active runs and records processing state.
-4. Convert replay-only SSE to long-lived database event streaming with reconnect/`Last-Event-ID` behavior.
-5. Complete real Stripe refund and subscription/Test Clock scenario executors plus worker restart tests.
-6. Deploy web/API/worker/PostgreSQL with HTTPS webhook ingress, secret management, telemetry, backups, rate limits, and incident drills.
-7. Run the final real Stripe Sandbox acceptance flow after the user places test credentials in ignored local files.
+1. Add a dedicated `stripe.webhook.received` consumer that correlates Stripe events to active tenant runs and records processing state.
+2. Convert replay-only SSE to long-lived database event streaming with reconnect/`Last-Event-ID` behavior.
+3. Complete real Stripe refund and subscription/Test Clock scenario executors plus worker restart tests; expose the already-tested reorder, timeout, and tamper relay modes through persisted scenario configuration.
+4. Add the next identity/operations layer: invitations or project switching, password recovery/verification, shared distributed throttling, key rotation, metrics/tracing, and administrative dead-letter replay.
+5. Deploy web/API/worker/PostgreSQL with HTTPS webhook ingress, secret management, telemetry, backups, rate limits, and incident drills.
+6. Run the final real Stripe Sandbox acceptance flow after the user places test credentials in ignored local files.
 
 ## Workspace truth
 
-The active Git repository is the Documents/Codex path above. The Desktop path is only a handoff mirror refreshed after a green commit. If the two differ, prefer the Git repository whose `docs/STATE.md` names the newest green implementation commit.
+The active Git repository is the Documents/Codex path above. The Desktop path is only a handoff mirror refreshed after a green commit. If the two differ, prefer the Git repository whose `docs/STATE.md` names the newest green implementation commit. At this handoff, the auth/resource slice is in the active worktree and the root integrator still owns its final commit and mirror refresh.

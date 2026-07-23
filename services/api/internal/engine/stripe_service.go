@@ -59,6 +59,17 @@ func ValidateSandboxSecret(secret string) error {
 }
 
 func (s *StripeService) ValidateConnection(ctx context.Context, secret, sandboxName string) (StripeConnection, *domain.Error) {
+	return s.validateConnection(ctx, "", secret, sandboxName)
+}
+
+func (s *StripeService) ValidateConnectionForProject(ctx context.Context, projectID, secret, sandboxName string) (StripeConnection, *domain.Error) {
+	if projectID == "" {
+		return StripeConnection{}, domain.Forbidden("project_required", "A project session is required.")
+	}
+	return s.validateConnection(ctx, projectID, secret, sandboxName)
+}
+
+func (s *StripeService) validateConnection(ctx context.Context, projectID, secret, sandboxName string) (StripeConnection, *domain.Error) {
 	if s == nil || s.gateway == nil || s.cipher == nil {
 		return StripeConnection{}, &domain.Error{Type: "api_error", Code: "connection_storage_not_configured", Message: "Encrypted Stripe connection storage is not configured.", HTTPStatus: 503}
 	}
@@ -85,7 +96,17 @@ func (s *StripeService) ValidateConnection(ctx context.Context, secret, sandboxN
 		Status: "connected", CreatedAt: s.now().UTC(), SecretCiphertext: ciphertext,
 		SecretEncryptionKeyID: 1,
 	}
-	stored, err := s.repo.SaveStripeConnection(ctx, connection)
+	save := s.repo.SaveStripeConnection
+	if projectID != "" {
+		tenantRepo, ok := s.repo.(TenantRepository)
+		if !ok {
+			return StripeConnection{}, domain.Internal("tenant_storage_unavailable", "Project-scoped connection storage is unavailable.")
+		}
+		save = func(ctx context.Context, connection StripeConnection) (StripeConnection, error) {
+			return tenantRepo.SaveStripeConnectionForProject(ctx, projectID, connection)
+		}
+	}
+	stored, err := save(ctx, connection)
 	if err != nil {
 		return StripeConnection{}, domain.Internal("connection_persistence_failed", "The validated connection could not be stored.")
 	}
@@ -95,6 +116,17 @@ func (s *StripeService) ValidateConnection(ctx context.Context, secret, sandboxN
 var currencyPattern = regexp.MustCompile(`^[a-z]{3}$`)
 
 func (s *StripeService) CreatePaymentIntentRun(ctx context.Context, connectionID string, amountMinor int64, currency, idempotencyKey string, requestBody []byte) (domain.Run, bool, *domain.Error) {
+	return s.createPaymentIntentRun(ctx, "", connectionID, amountMinor, currency, idempotencyKey, requestBody)
+}
+
+func (s *StripeService) CreatePaymentIntentRunForProject(ctx context.Context, projectID, connectionID string, amountMinor int64, currency, idempotencyKey string, requestBody []byte) (domain.Run, bool, *domain.Error) {
+	if projectID == "" {
+		return domain.Run{}, false, domain.Forbidden("project_required", "A project session is required.")
+	}
+	return s.createPaymentIntentRun(ctx, projectID, connectionID, amountMinor, currency, idempotencyKey, requestBody)
+}
+
+func (s *StripeService) createPaymentIntentRun(ctx context.Context, projectID, connectionID string, amountMinor int64, currency, idempotencyKey string, requestBody []byte) (domain.Run, bool, *domain.Error) {
 	if s == nil || s.gateway == nil || s.cipher == nil {
 		return domain.Run{}, false, &domain.Error{Type: "api_error", Code: "connection_storage_not_configured", Message: "Encrypted Stripe connection storage is not configured.", HTTPStatus: 503}
 	}
@@ -109,7 +141,25 @@ func (s *StripeService) CreatePaymentIntentRun(ctx context.Context, connectionID
 	}
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	requestHash := sha256.Sum256(requestBody)
-	if replay, found, err := s.repo.ReplayRun(ctx, keyHash, requestHash); err != nil {
+	replayRun := s.repo.ReplayRun
+	createRun := s.repo.CreateRun
+	loadConnection := s.repo.StripeConnection
+	if projectID != "" {
+		tenantRepo, ok := s.repo.(TenantRepository)
+		if !ok {
+			return domain.Run{}, false, domain.Internal("tenant_storage_unavailable", "Project-scoped Stripe storage is unavailable.")
+		}
+		replayRun = func(ctx context.Context, keyHash, requestHash [sha256.Size]byte) (domain.Run, bool, error) {
+			return tenantRepo.ReplayRunForProject(ctx, projectID, keyHash, requestHash)
+		}
+		createRun = func(ctx context.Context, keyHash, requestHash [sha256.Size]byte, bundle RunBundle) (domain.Run, bool, error) {
+			return tenantRepo.CreateRunForProject(ctx, projectID, keyHash, requestHash, bundle)
+		}
+		loadConnection = func(ctx context.Context, id string) (StripeConnection, bool, error) {
+			return tenantRepo.StripeConnectionForProject(ctx, projectID, id)
+		}
+	}
+	if replay, found, err := replayRun(ctx, keyHash, requestHash); err != nil {
 		if errors.Is(err, ErrIdempotencyConflict) {
 			return domain.Run{}, false, domain.Conflict("idempotency_key_in_use", "This idempotency key was already used with different request parameters.", "Idempotency-Key")
 		}
@@ -120,7 +170,7 @@ func (s *StripeService) CreatePaymentIntentRun(ctx context.Context, connectionID
 	if !uuidPattern.MatchString(connectionID) {
 		return domain.Run{}, false, domain.NotFound("stripe_connection", connectionID)
 	}
-	connection, ok, err := s.repo.StripeConnection(ctx, connectionID)
+	connection, ok, err := loadConnection(ctx, connectionID)
 	if err != nil {
 		return domain.Run{}, false, domain.Internal("connection_lookup_failed", "The Stripe connection could not be loaded.")
 	}
@@ -167,7 +217,7 @@ func (s *StripeService) CreatePaymentIntentRun(ctx context.Context, connectionID
 		Expected: fmt.Sprintf("%d %s", amountMinor, currency), Observed: fmt.Sprintf("%d %s", intent.Amount, intent.Currency), Evidence: intent.ID,
 	})
 	bundle.Report.Summary = fmt.Sprintf("%d of %d deterministic assertions passed.", passedCount(bundle.Report.Assertions), len(bundle.Report.Assertions))
-	run, replayed, err := s.repo.CreateRun(ctx, keyHash, requestHash, bundle)
+	run, replayed, err := createRun(ctx, keyHash, requestHash, bundle)
 	if errors.Is(err, ErrIdempotencyConflict) {
 		return domain.Run{}, false, domain.Conflict("idempotency_key_in_use", "This idempotency key was already used with different request parameters.", "Idempotency-Key")
 	}

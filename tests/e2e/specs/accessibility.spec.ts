@@ -18,7 +18,8 @@ const routes = [
 ];
 
 for (const route of routes) {
-  test(`${route} has no serious accessibility violations`, async ({ page }) => {
+  test(`${route} has no serious accessibility violations`, async ({ context, page }) => {
+    if (route === "/login") await context.clearCookies();
     await page.goto(route);
     await expect(page.getByRole("main")).toBeVisible();
     const results = await new AxeBuilder({ page }).analyze();

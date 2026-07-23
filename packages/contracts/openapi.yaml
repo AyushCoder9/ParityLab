@@ -21,6 +21,262 @@ paths:
                   status: { const: ok }
                   service: { const: paritylab-api }
                   mode: { const: sandbox }
+  /v1/auth/register:
+    post:
+      operationId: register
+      description: Atomically creates an owner, organization, project, default environments, and opaque session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password, workspace_name, project_name]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, format: password, writeOnly: true, minLength: 12, maxLength: 256 }
+                workspace_name: { type: string, minLength: 1, maxLength: 120 }
+                project_name: { type: string, minLength: 1, maxLength: 120 }
+      responses:
+        '201':
+          description: Authenticated session. The opaque token is set only as a hardened HttpOnly cookie.
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionView' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, format: password, writeOnly: true, minLength: 1, maxLength: 256 }
+      responses:
+        '200':
+          description: Authenticated session with an opaque HttpOnly cookie.
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionView' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      security: [{ cookieAuth: [] }]
+      responses:
+        '204':
+          description: Session revoked and cookie cleared. Repeated logout is safe.
+          headers:
+            Set-Cookie: { schema: { type: string } }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/session:
+    get:
+      operationId: getSession
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Current authenticated identity and project scope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionView' }
+        '401': { $ref: '#/components/responses/Error' }
+  /v1/settings/project:
+    get:
+      operationId: getProjectSettings
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Current project settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectSettings' }
+        '401': { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateProjectSettings
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                retention_days: { type: integer, minimum: 1, maximum: 3650 }
+      responses:
+        '200':
+          description: Persisted project settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectSettings' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/environments:
+    get:
+      operationId: listEnvironments
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Project-scoped environments.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/List'
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/Environment' } }
+        '401': { $ref: '#/components/responses/Error' }
+  /v1/environments/{id}/select:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: selectEnvironment
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Newly selected project environment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/findings:
+    get:
+      operationId: listFindings
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, resolved, all], default: all }
+      responses:
+        '200':
+          description: Project-scoped persisted findings.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/List'
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+  /v1/findings/{id}/resolve:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: resolveFinding
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Persisted resolved finding.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Finding' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/findings/{id}/reopen:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: reopenFinding
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Persisted reopened finding.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Finding' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/notifications:
+    get:
+      operationId: listNotifications
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Project-scoped notifications.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/List'
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+        '401': { $ref: '#/components/responses/Error' }
+  /v1/notifications/read-all:
+    post:
+      operationId: markAllNotificationsRead
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Count of unread notifications marked read.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated: { type: integer, minimum: 0 }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/notifications/{id}/read:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: markNotificationRead
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Persisted read notification.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Notification' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/connections:
+    get:
+      operationId: listConnections
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Sanitized project-scoped Stripe connections. Secret material is never returned.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/List'
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/StripeConnection' } }
+        '401': { $ref: '#/components/responses/Error' }
   /v1/overview:
     get:
       operationId: getOverview
@@ -138,6 +394,7 @@ paths:
     post:
       operationId: validateStripeConnection
       description: Validates a sandbox-only secret with Stripe and stores it encrypted. The secret is never returned.
+      security: [{ cookieAuth: [] }]
       requestBody:
         required: true
         content:
@@ -162,11 +419,14 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/StripeConnection' }
         '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
   /v1/stripe/payment-intents:
     post:
       operationId: createStripePaymentIntentRun
       description: Creates a real Stripe Sandbox PaymentIntent and persists its duplicate-submission verification evidence.
+      security: [{ cookieAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -191,6 +451,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Run' }
         '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
@@ -234,6 +496,12 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
 components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: paritylab_session
+      description: Opaque session token. Only its SHA-256 digest is persisted server-side.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -245,6 +513,11 @@ components:
       in: path
       required: true
       schema: { type: string, pattern: '^run_[0-9]{6,}$' }
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     Error:
       description: Stripe-style API error
@@ -255,6 +528,62 @@ components:
     Fault:
       type: string
       enum: [none, duplicate, reorder, timeout, tamper]
+    SessionView:
+      type: object
+      additionalProperties: false
+      required: [authenticated, user, organization, project, expires_at]
+      properties:
+        authenticated: { const: true }
+        user:
+          type: object
+          additionalProperties: false
+          required: [id, email]
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string, format: email }
+        organization:
+          type: object
+          additionalProperties: false
+          required: [id, name, role]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            role: { type: string, enum: [owner, admin, member, viewer] }
+        project:
+          allOf:
+            - $ref: '#/components/schemas/ProjectSettings'
+        expires_at: { type: string, format: date-time }
+    ProjectSettings:
+      type: object
+      additionalProperties: false
+      required: [id, name, retention_days]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        retention_days: { type: integer, minimum: 1, maximum: 3650 }
+    Environment:
+      type: object
+      additionalProperties: false
+      required: [id, name, kind, is_default]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { type: string, enum: [local, sandbox, staging] }
+        is_default: { type: boolean }
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, kind, payload, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        run_id: { type: string }
+        kind: { type: string }
+        payload: { type: object, additionalProperties: true }
+        read_at:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        created_at: { type: string, format: date-time }
     StripeConnection:
       type: object
       additionalProperties: false

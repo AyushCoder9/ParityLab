@@ -1,6 +1,6 @@
 # Engine workstream
 
-Status: Phase 1 persistence, the credential-gated Phase 2 Stripe Sandbox PaymentIntent slice, and the smallest green Phase 3 durable worker/reference-merchant slice are implemented.
+Status: Phase 1 persistence, the credential-gated Phase 2 Stripe Sandbox PaymentIntent slice, the smallest green Phase 3 durable worker/reference-merchant slice, and the authentication/tenant-resource slice are implemented.
 
 ## Delivered
 
@@ -40,11 +40,11 @@ go run ./services/api/cmd/paritylab
 
 The process does not listen until PostgreSQL is reachable and every migration is verified/applied. Therefore `GET /healthz` returning 200 after startup is the current readiness signal. If `DATABASE_URL` is omitted, ParityLab intentionally runs the deterministic in-memory demo.
 
-## Deferred after Phase 1
+## Deferred at the Phase 1 checkpoint
 
 - Webhook domain processing beyond its durable ingress job remains a later Phase 3 expansion.
 - The outbox is transactionally populated but no publisher/lease loop runs yet.
-- Authentication and tenant authorization are not wired to the new schema yet.
+- Authentication and tenant authorization were deferred at that checkpoint and are now delivered in the authentication/tenant-resource slice below.
 - Long-lived database-backed SSE with `Last-Event-ID` is not part of this slice; the route continues to stream the persisted finite timeline.
 
 ## Phase 2 Stripe Sandbox vertical slice
@@ -73,7 +73,7 @@ The process does not listen until PostgreSQL is reachable and every migration is
 
 - No real Stripe request was executed because no Sandbox secret/restricted key was provided. The adapter is production code, while CI/local tests use deterministic HTTP mocks.
 - This slice creates an unconfirmed Sandbox PaymentIntent and persists the duplicate-delivery evidence model. A real signed Stripe webhook is still accepted by the durable ingress, but end-to-end correlation from that delivery into an asynchronous worker is Phase 3.
-- Authentication/tenant selection is not available yet. Connections are attached to the documented local default sandbox project until identity and workspace APIs land.
+- Authenticated connections are now attached to the current project and cannot be used across tenants. The unauthenticated seeded/demo boundary remains separate for the public tour.
 - Encryption supports version metadata but automated key rotation/re-encryption is deferred.
 
 ## Phase 3 durable worker and reference merchant
@@ -116,3 +116,34 @@ The API and worker are intentionally separate processes. The API remains latency
 - Only duplicate relay execution is wired into queued Stripe runs. Reorder, timeout, and tamper are implemented/tested at the versioned relay layer but are not yet selectable through persisted scenario configuration.
 - Report enrichment is idempotent but mutates the preliminary report snapshot. A later state-machine slice must keep runs `running` until grading and emit the immutable final report only once.
 - Worker metrics, OpenTelemetry spans, administrative dead-letter replay, and per-project concurrency/rate limits remain to be added.
+
+## Authentication, tenancy, and persisted resources
+
+### Delivered security model
+
+- `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/logout`, and `GET /v1/session` provide real account/session behavior. Registration is one transaction across the user, organization, owner membership, project, default environments, session, and audit event.
+- Passwords use Argon2id. The normalized email is encrypted with the existing AES-256-GCM key and located using a keyed blind index; neither password nor plaintext email is persisted.
+- Session tokens are generated from a cryptographic random source, returned only in an opaque cookie, and stored only as SHA-256 hashes. The cookie is 24-hour, `HttpOnly`, `SameSite=Lax`, and `Secure` by default. Logout revokes the database session; expired or revoked tokens fail closed.
+- The explicit insecure-cookie override is accepted only for loopback development origins. Credentialed CORS is limited to the configured web origin, and cookie-authenticated mutations reject a missing/mismatched Origin as CSRF.
+- Login returns the same invalid-credential error for known and unknown users, performs a dummy Argon2 verification on an unknown email, and applies a bounded in-process failure limiter keyed by client plus blind account index with a `Retry-After` response.
+- Migration `000006_auth_tenancy` adds encrypted user/password fields, project retention, revocable hashed sessions, and per-project local/sandbox/staging environments with a single selected default.
+
+### Delivered tenant/resource model
+
+- Engine and Stripe repository ports now have project-scoped run, event, report, idempotency, connection, and PaymentIntent operations for both PostgreSQL and memory adapters.
+- Tenant-created runs persist their project relationship, findings, completion notification, audit entry, and outbox work in the existing transaction. Public seeded/demo records remain `project_id IS NULL` and are never returned as tenant-owned records.
+- `GET/PATCH /v1/settings/project`, `GET /v1/environments`, environment select, finding list/resolve/reopen, notification list/read/read-all, and sanitized connection list are protected, durable APIs.
+- All resource lookups include the authenticated project. A valid identifier from another tenant returns 404, including Stripe connection use, environment selection, finding mutation, and notification mutation.
+- Environment switching clears and sets the single selected environment within one transaction. Protected resource mutations also write tenant audit events.
+
+### Authoritative integration evidence
+
+`PARITYLAB_CONFIRM_FRESH=1 tests/scripts/auth-resource-restart.sh` passed against its dedicated Compose project. The harness starts from a fresh database and strict Stripe mock, verifies default Secure and loopback cookie modes, registration redaction, protected Stripe calls, known/unknown login parity, throttling, durable settings/environment/finding/notification mutations, tenant isolation, CSRF, expired sessions, API-restart persistence, logout revocation, and API-log secret absence. Its cleanup is restricted to the named auth test project and volumes.
+
+Focused auth, HTTP route, repository, environment-switch, and tenant-memory tests accompany that black-box harness. The separate authenticated browser gate also passed Chromium 17/17 and WebKit 17/17 against the fresh integrated stack.
+
+### Remaining identity/operations work
+
+- The current registration creates one owner organization/project. Invitations, additional projects/project switching, password recovery, email verification, MFA/passkeys, and a user-facing session inventory are future slices.
+- Login throttling is process-local; a multi-instance deployment needs a shared limiter and broader abuse controls.
+- Encryption data carries key-version metadata, but automated email/Stripe-secret rotation and re-encryption are not implemented.

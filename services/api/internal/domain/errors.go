@@ -34,3 +34,11 @@ func Conflict(code, message, param string) *Error {
 func Internal(code, message string) *Error {
 	return &Error{Type: "api_error", Code: code, Message: message, HTTPStatus: 500}
 }
+
+func Unauthorized(code, message string) *Error {
+	return &Error{Type: "authentication_error", Code: code, Message: message, HTTPStatus: 401}
+}
+
+func Forbidden(code, message string) *Error {
+	return &Error{Type: "permission_error", Code: code, Message: message, HTTPStatus: 403}
+}

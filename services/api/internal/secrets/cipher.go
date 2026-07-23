@@ -3,14 +3,19 @@ package secrets
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 )
 
-type Cipher struct{ aead cipher.AEAD }
+type Cipher struct {
+	aead     cipher.AEAD
+	indexKey [sha256.Size]byte
+}
 
 func New(encodedKey string) (*Cipher, error) {
 	if encodedKey == "" {
@@ -31,7 +36,15 @@ func New(encodedKey string) (*Cipher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Cipher{aead: aead}, nil
+	return &Cipher{aead: aead, indexKey: sha256.Sum256(append([]byte("paritylab:blind-index:v1:"), key...))}, nil
+}
+
+func (c *Cipher) BlindIndex(value string) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, c.indexKey[:])
+	_, _ = mac.Write([]byte(value))
+	var result [sha256.Size]byte
+	copy(result[:], mac.Sum(nil))
+	return result
 }
 
 func (c *Cipher) Encrypt(plaintext []byte, associatedData string) ([]byte, error) {

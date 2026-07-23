@@ -57,6 +57,17 @@ func (s *Service) Scenario(id string) (domain.Scenario, bool) {
 }
 
 func (s *Service) CreateRun(scenarioID string, fault domain.Fault, idempotencyKey string, requestBody []byte) (domain.Run, bool, *domain.Error) {
+	return s.createRun("", scenarioID, fault, idempotencyKey, requestBody)
+}
+
+func (s *Service) CreateRunForProject(projectID, scenarioID string, fault domain.Fault, idempotencyKey string, requestBody []byte) (domain.Run, bool, *domain.Error) {
+	if projectID == "" {
+		return domain.Run{}, false, domain.Forbidden("project_required", "A project session is required.")
+	}
+	return s.createRun(projectID, scenarioID, fault, idempotencyKey, requestBody)
+}
+
+func (s *Service) createRun(projectID, scenarioID string, fault domain.Fault, idempotencyKey string, requestBody []byte) (domain.Run, bool, *domain.Error) {
 	if idempotencyKey == "" {
 		return domain.Run{}, false, domain.Invalid("idempotency_key_missing", "An Idempotency-Key header is required for this request.", "Idempotency-Key")
 	}
@@ -74,7 +85,21 @@ func (s *Service) CreateRun(scenarioID string, fault domain.Fault, idempotencyKe
 	ctx := context.Background()
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	requestHash := sha256.Sum256(requestBody)
-	if replay, found, err := s.repo.ReplayRun(ctx, keyHash, requestHash); err != nil {
+	replayRun := s.repo.ReplayRun
+	createRun := s.repo.CreateRun
+	if projectID != "" {
+		tenantRepo, ok := s.repo.(TenantRepository)
+		if !ok {
+			return domain.Run{}, false, domain.Internal("tenant_storage_unavailable", "Project-scoped run storage is unavailable.")
+		}
+		replayRun = func(ctx context.Context, keyHash, requestHash [sha256.Size]byte) (domain.Run, bool, error) {
+			return tenantRepo.ReplayRunForProject(ctx, projectID, keyHash, requestHash)
+		}
+		createRun = func(ctx context.Context, keyHash, requestHash [sha256.Size]byte, bundle RunBundle) (domain.Run, bool, error) {
+			return tenantRepo.CreateRunForProject(ctx, projectID, keyHash, requestHash, bundle)
+		}
+	}
+	if replay, found, err := replayRun(ctx, keyHash, requestHash); err != nil {
 		if errors.Is(err, ErrIdempotencyConflict) {
 			return domain.Run{}, false, domain.Conflict("idempotency_key_in_use", "This idempotency key was already used with different request parameters.", "Idempotency-Key")
 		}
@@ -88,7 +113,7 @@ func (s *Service) CreateRun(scenarioID string, fault domain.Fault, idempotencyKe
 	}
 	number := numberFromRunID(id)
 	bundle := buildRunBundle(id, number, scenario, fault, demoEpoch.Add(time.Duration(number)*23*time.Minute))
-	run, replayed, err := s.repo.CreateRun(ctx, keyHash, requestHash, bundle)
+	run, replayed, err := createRun(ctx, keyHash, requestHash, bundle)
 	if errors.Is(err, ErrIdempotencyConflict) {
 		return domain.Run{}, false, domain.Conflict("idempotency_key_in_use", "This idempotency key was already used with different request parameters.", "Idempotency-Key")
 	}
@@ -96,6 +121,84 @@ func (s *Service) CreateRun(scenarioID string, fault domain.Fault, idempotencyKe
 		return domain.Run{}, false, domain.Internal("persistence_failed", "The run could not be durably persisted.")
 	}
 	return run, replayed, nil
+}
+
+func (s *Service) RunForProject(projectID, id string) (domain.Run, bool) {
+	repo, ok := s.repo.(TenantRepository)
+	if !ok {
+		return domain.Run{}, false
+	}
+	run, found, err := repo.RunForProject(context.Background(), projectID, id)
+	return run, found && err == nil
+}
+
+func (s *Service) RunsForProject(projectID string) []domain.Run {
+	repo, ok := s.repo.(TenantRepository)
+	if !ok {
+		return []domain.Run{}
+	}
+	runs, err := repo.ListRunsForProject(context.Background(), projectID)
+	if err != nil {
+		return []domain.Run{}
+	}
+	return runs
+}
+
+func (s *Service) EventsForProject(projectID, id string) ([]domain.Event, bool) {
+	repo, ok := s.repo.(TenantRepository)
+	if !ok {
+		return nil, false
+	}
+	events, found, err := repo.EventsForProject(context.Background(), projectID, id)
+	return events, found && err == nil
+}
+
+func (s *Service) ReportForProject(projectID, id string) (domain.Report, bool) {
+	repo, ok := s.repo.(TenantRepository)
+	if !ok {
+		return domain.Report{}, false
+	}
+	report, found, err := repo.ReportForProject(context.Background(), projectID, id)
+	return report, found && err == nil
+}
+
+func (s *Service) PublicRun(id string) (domain.Run, bool) {
+	repo, ok := s.repo.(PublicRepository)
+	if !ok {
+		return domain.Run{}, false
+	}
+	run, found, err := repo.PublicRun(context.Background(), id)
+	return run, found && err == nil
+}
+
+func (s *Service) PublicRuns() []domain.Run {
+	repo, ok := s.repo.(PublicRepository)
+	if !ok {
+		return []domain.Run{}
+	}
+	runs, err := repo.ListPublicRuns(context.Background())
+	if err != nil {
+		return []domain.Run{}
+	}
+	return runs
+}
+
+func (s *Service) PublicEvents(id string) ([]domain.Event, bool) {
+	repo, ok := s.repo.(PublicRepository)
+	if !ok {
+		return nil, false
+	}
+	events, found, err := repo.PublicEvents(context.Background(), id)
+	return events, found && err == nil
+}
+
+func (s *Service) PublicReport(id string) (domain.Report, bool) {
+	repo, ok := s.repo.(PublicRepository)
+	if !ok {
+		return domain.Report{}, false
+	}
+	report, found, err := repo.PublicReport(context.Background(), id)
+	return report, found && err == nil
 }
 
 func (s *Service) Run(id string) (domain.Run, bool) {

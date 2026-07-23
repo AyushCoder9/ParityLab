@@ -21,17 +21,20 @@ type memoryIdempotencyRecord struct {
 // MemoryRepository is the credential-free local adapter. It preserves the
 // deterministic demo while exercising the same port as PostgreSQL.
 type MemoryRepository struct {
-	mu              sync.RWMutex
-	runs            map[string]domain.Run
-	events          map[string][]domain.Event
-	reports         map[string]domain.Report
-	idempotency     map[[sha256.Size]byte]memoryIdempotencyRecord
-	webhooks        map[string]WebhookReceipt
-	connections     map[string]StripeConnection
-	nextRun         int
-	outbox          map[string]memoryOutbox
-	nextOutbox      int
-	merchantEffects map[string]int
+	mu                  sync.RWMutex
+	runs                map[string]domain.Run
+	events              map[string][]domain.Event
+	reports             map[string]domain.Report
+	idempotency         map[[sha256.Size]byte]memoryIdempotencyRecord
+	tenantIdempotency   map[string]memoryIdempotencyRecord
+	projectByRun        map[string]string
+	projectByConnection map[string]string
+	webhooks            map[string]WebhookReceipt
+	connections         map[string]StripeConnection
+	nextRun             int
+	outbox              map[string]memoryOutbox
+	nextOutbox          int
+	merchantEffects     map[string]int
 }
 
 type memoryOutbox struct {
@@ -45,9 +48,116 @@ func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		runs: make(map[string]domain.Run), events: make(map[string][]domain.Event),
 		reports: make(map[string]domain.Report), idempotency: make(map[[sha256.Size]byte]memoryIdempotencyRecord),
-		webhooks: make(map[string]WebhookReceipt), connections: make(map[string]StripeConnection), nextRun: 4,
+		tenantIdempotency: make(map[string]memoryIdempotencyRecord), projectByRun: make(map[string]string),
+		projectByConnection: make(map[string]string),
+		webhooks:            make(map[string]WebhookReceipt), connections: make(map[string]StripeConnection), nextRun: 4,
 		outbox: make(map[string]memoryOutbox), nextOutbox: 1, merchantEffects: make(map[string]int),
 	}
+}
+
+func tenantIdempotencyKey(projectID string, keyHash [sha256.Size]byte) string {
+	return projectID + ":" + fmt.Sprintf("%x", keyHash[:])
+}
+
+func (r *MemoryRepository) ReplayRunForProject(_ context.Context, projectID string, keyHash, requestHash [sha256.Size]byte) (domain.Run, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	previous, exists := r.tenantIdempotency[tenantIdempotencyKey(projectID, keyHash)]
+	if !exists {
+		return domain.Run{}, false, nil
+	}
+	if previous.requestHash != requestHash {
+		return domain.Run{}, false, ErrIdempotencyConflict
+	}
+	return r.runs[previous.runID], true, nil
+}
+
+func (r *MemoryRepository) CreateRunForProject(_ context.Context, projectID string, keyHash, requestHash [sha256.Size]byte, bundle RunBundle) (domain.Run, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := tenantIdempotencyKey(projectID, keyHash)
+	if previous, exists := r.tenantIdempotency[key]; exists {
+		if previous.requestHash != requestHash {
+			return domain.Run{}, false, ErrIdempotencyConflict
+		}
+		return r.runs[previous.runID], true, nil
+	}
+	r.runs[bundle.Run.ID] = bundle.Run
+	r.events[bundle.Run.ID] = cloneEvents(bundle.Events)
+	r.reports[bundle.Run.ID] = bundle.Report
+	r.projectByRun[bundle.Run.ID] = projectID
+	r.tenantIdempotency[key] = memoryIdempotencyRecord{requestHash: requestHash, runID: bundle.Run.ID}
+	r.enqueueLocked(bundle)
+	return bundle.Run, false, nil
+}
+
+func (r *MemoryRepository) RunForProject(_ context.Context, projectID, id string) (domain.Run, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	value, ok := r.runs[id]
+	return value, ok && r.projectByRun[id] == projectID, nil
+}
+
+func (r *MemoryRepository) EventsForProject(ctx context.Context, projectID, id string) ([]domain.Event, bool, error) {
+	if _, ok, err := r.RunForProject(ctx, projectID, id); err != nil || !ok {
+		return nil, ok, err
+	}
+	return r.Events(ctx, id)
+}
+
+func (r *MemoryRepository) ReportForProject(ctx context.Context, projectID, id string) (domain.Report, bool, error) {
+	if _, ok, err := r.RunForProject(ctx, projectID, id); err != nil || !ok {
+		return domain.Report{}, ok, err
+	}
+	return r.Report(ctx, id)
+}
+
+func (r *MemoryRepository) ListRunsForProject(_ context.Context, projectID string) ([]domain.Run, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]domain.Run, 0)
+	for id, value := range r.runs {
+		if r.projectByRun[id] == projectID {
+			items = append(items, value)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].StartedAt.After(items[j].StartedAt) })
+	return items, nil
+}
+
+func (r *MemoryRepository) PublicRun(_ context.Context, id string) (domain.Run, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	value, ok := r.runs[id]
+	_, tenantOwned := r.projectByRun[id]
+	return value, ok && !tenantOwned, nil
+}
+
+func (r *MemoryRepository) PublicEvents(ctx context.Context, id string) ([]domain.Event, bool, error) {
+	if _, ok, err := r.PublicRun(ctx, id); err != nil || !ok {
+		return nil, ok, err
+	}
+	return r.Events(ctx, id)
+}
+
+func (r *MemoryRepository) PublicReport(ctx context.Context, id string) (domain.Report, bool, error) {
+	if _, ok, err := r.PublicRun(ctx, id); err != nil || !ok {
+		return domain.Report{}, ok, err
+	}
+	return r.Report(ctx, id)
+}
+
+func (r *MemoryRepository) ListPublicRuns(_ context.Context) ([]domain.Run, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]domain.Run, 0)
+	for id, value := range r.runs {
+		if _, tenantOwned := r.projectByRun[id]; !tenantOwned {
+			items = append(items, value)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].StartedAt.After(items[j].StartedAt) })
+	return items, nil
 }
 
 func (r *MemoryRepository) NextRunID(context.Context) (string, error) {
@@ -165,6 +275,46 @@ func (r *MemoryRepository) StripeConnection(_ context.Context, id string) (Strip
 	connection, ok := r.connections[id]
 	connection.SecretCiphertext = append([]byte(nil), connection.SecretCiphertext...)
 	return connection, ok, nil
+}
+
+func (r *MemoryRepository) SaveStripeConnectionForProject(_ context.Context, projectID string, connection StripeConnection) (StripeConnection, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, existing := range r.connections {
+		if r.projectByConnection[id] == projectID && existing.StripeAccountID == connection.StripeAccountID {
+			connection.ID = id
+			connection.CreatedAt = existing.CreatedAt
+		}
+	}
+	connection.SecretCiphertext = append([]byte(nil), connection.SecretCiphertext...)
+	r.connections[connection.ID] = connection
+	r.projectByConnection[connection.ID] = projectID
+	return connection, nil
+}
+
+func (r *MemoryRepository) StripeConnectionForProject(ctx context.Context, projectID, id string) (StripeConnection, bool, error) {
+	r.mu.RLock()
+	owned := r.projectByConnection[id] == projectID
+	r.mu.RUnlock()
+	if !owned {
+		return StripeConnection{}, false, nil
+	}
+	return r.StripeConnection(ctx, id)
+}
+
+func (r *MemoryRepository) ListStripeConnectionsForProject(_ context.Context, projectID string) ([]StripeConnection, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]StripeConnection, 0)
+	for id, connection := range r.connections {
+		if r.projectByConnection[id] != projectID {
+			continue
+		}
+		connection.SecretCiphertext = nil
+		items = append(items, connection)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	return items, nil
 }
 
 func cloneEvents(events []domain.Event) []domain.Event {

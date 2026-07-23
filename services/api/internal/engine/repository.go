@@ -80,3 +80,26 @@ type Repository interface {
 	ApplyReferenceMerchantEffect(context.Context, string, int) (bool, error)
 	Close() error
 }
+
+// TenantRepository is the authenticated product data boundary. Public demo
+// records deliberately have a NULL project_id and remain reachable only
+// through the legacy Repository reads. Product handlers must use these methods
+// after resolving a session and must never accept a project ID from the client.
+type TenantRepository interface {
+	ReplayRunForProject(context.Context, string, [sha256.Size]byte, [sha256.Size]byte) (domain.Run, bool, error)
+	CreateRunForProject(context.Context, string, [sha256.Size]byte, [sha256.Size]byte, RunBundle) (domain.Run, bool, error)
+	RunForProject(context.Context, string, string) (domain.Run, bool, error)
+	EventsForProject(context.Context, string, string) ([]domain.Event, bool, error)
+	ReportForProject(context.Context, string, string) (domain.Report, bool, error)
+	ListRunsForProject(context.Context, string) ([]domain.Run, error)
+	SaveStripeConnectionForProject(context.Context, string, StripeConnection) (StripeConnection, error)
+	StripeConnectionForProject(context.Context, string, string) (StripeConnection, bool, error)
+	ListStripeConnectionsForProject(context.Context, string) ([]StripeConnection, error)
+}
+
+type PublicRepository interface {
+	PublicRun(context.Context, string) (domain.Run, bool, error)
+	PublicEvents(context.Context, string) ([]domain.Event, bool, error)
+	PublicReport(context.Context, string) (domain.Report, bool, error)
+	ListPublicRuns(context.Context) ([]domain.Run, error)
+}

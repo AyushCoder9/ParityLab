@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ayushkumarsingh/paritylab/services/api/internal/auth"
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/engine"
 	"github.com/ayushkumarsingh/paritylab/services/api/internal/httpapi"
 	postgresadapter "github.com/ayushkumarsingh/paritylab/services/api/internal/postgres"
@@ -65,12 +67,35 @@ func run() error {
 		return err
 	}
 	stripeService := engine.NewStripeService(repository, stripeadapter.New(stripeBase, nil), secretCipher)
+	var authService *auth.Service
+	if secretCipher != nil {
+		var authRepository auth.Repository
+		if postgresRepository, ok := repository.(*postgresadapter.Repository); ok {
+			authRepository = postgresRepository
+		} else {
+			authRepository = auth.NewMemoryRepository(func(ctx context.Context, projectID string) ([]engine.StripeConnection, error) {
+				tenantRepository, ok := repository.(engine.TenantRepository)
+				if !ok {
+					return []engine.StripeConnection{}, nil
+				}
+				return tenantRepository.ListStripeConnectionsForProject(ctx, projectID)
+			})
+		}
+		authService = auth.NewService(authRepository, secretCipher)
+	}
 
+	webOrigin := envOr("WEB_ORIGIN", "http://127.0.0.1:3000")
+	insecureCookies, err := configuredCookiePolicy(webOrigin)
+	if err != nil {
+		return err
+	}
 	handler := httpapi.New(service, httpapi.Config{
-		WebOrigin:     envOr("WEB_ORIGIN", "http://127.0.0.1:3000"),
-		WebhookSecret: envOr("STRIPE_WEBHOOK_SECRET", "whsec_paritylab_demo"),
-		EndpointToken: envOr("STRIPE_ENDPOINT_TOKEN", "demo"),
-		Stripe:        stripeService,
+		WebOrigin:       webOrigin,
+		WebhookSecret:   envOr("STRIPE_WEBHOOK_SECRET", "whsec_paritylab_demo"),
+		EndpointToken:   envOr("STRIPE_ENDPOINT_TOKEN", "demo"),
+		Stripe:          stripeService,
+		Auth:            authService,
+		InsecureCookies: insecureCookies,
 	})
 	server := &http.Server{
 		Addr: envOr("API_ADDRESS", ":8080"), Handler: handler,
@@ -93,6 +118,25 @@ func run() error {
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
 	}
+}
+
+func configuredCookiePolicy(webOrigin string) (bool, error) {
+	if os.Getenv("PARITYLAB_INSECURE_COOKIES") != "true" {
+		return false, nil
+	}
+	parsed, err := url.Parse(webOrigin)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() == "" {
+		return false, errors.New("PARITYLAB_INSECURE_COOKIES requires an absolute loopback HTTP WEB_ORIGIN")
+	}
+	host := parsed.Hostname()
+	if host == "localhost" {
+		return true, nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return false, errors.New("PARITYLAB_INSECURE_COOKIES is allowed only for a loopback WEB_ORIGIN")
+	}
+	return true, nil
 }
 
 func configuredStripeAPIBase() (string, error) {

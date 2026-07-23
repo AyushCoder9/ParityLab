@@ -4,13 +4,14 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BrandMark, Icon, StatusPill } from "@paritylab/ui";
-import { checkEngine } from "@/lib/api";
+import { checkEngine, getEnvironments, getFindings, getNotifications, logout } from "@/lib/api";
+import { useAuth } from "./auth-context";
 
 const nav = [
   { label: "Overview", href: "/dashboard", icon: "dashboard" as const },
   { label: "Scenarios", href: "/scenarios", icon: "simulation" as const },
   { label: "Runs", href: "/runs", icon: "event" as const },
-  { label: "Findings", href: "/findings", icon: "finding" as const, count: 1 },
+  { label: "Findings", href: "/findings", icon: "finding" as const },
   { label: "Reports", href: "/reports", icon: "report" as const },
   { label: "Connections", href: "/connections", icon: "spark" as const },
   { label: "Environments", href: "/environments", icon: "team" as const },
@@ -27,17 +28,39 @@ const commands = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { session } = useAuth();
   const [commandOpen, setCommandOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [accountOpen, setAccountOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [engineOnline, setEngineOnline] = useState(false);
+  const [selectedEnvironment, setSelectedEnvironment] = useState("Environment");
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [openFindings, setOpenFindings] = useState(0);
+  const [signOutError, setSignOutError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     checkEngine(controller.signal).then(setEngineOnline).catch(() => setEngineOnline(false));
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadResources = () => {
+      void Promise.allSettled([
+        getEnvironments(controller.signal).then((response) => setSelectedEnvironment(response.data.find((item) => item.is_default)?.name ?? "Environment")),
+        getNotifications(controller.signal).then((response) => setUnreadNotifications(response.data.filter((item) => !item.read_at).length)),
+        getFindings("open", controller.signal).then((response) => setOpenFindings(response.data.length)),
+      ]);
+    };
+    loadResources();
+    window.addEventListener("paritylab:resources-changed", loadResources);
+    return () => {
+      controller.abort();
+      window.removeEventListener("paritylab:resources-changed", loadResources);
+    };
   }, []);
 
   useEffect(() => {
@@ -61,11 +84,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [commandOpen]);
 
   const results = useMemo(() => commands.filter((command) => command.label.toLowerCase().includes(query.toLowerCase())), [query]);
+  const initials = session?.user.email.slice(0, 2).toUpperCase() ?? "PL";
 
   function runCommand(href: string) {
     setCommandOpen(false);
     setQuery("");
     router.push(href);
+  }
+
+  async function signOut() {
+    setSignOutError("");
+    try {
+      await logout();
+      router.replace("/login");
+      router.refresh();
+    } catch {
+      setSignOutError("Sign out could not be completed. Your session remains active; retry when the API is online.");
+      setAccountOpen(false);
+      setMoreOpen(false);
+    }
   }
 
   return (
@@ -74,38 +111,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="app-sidebar">
         <Link href="/" className="brand-link"><BrandMark /></Link>
         <Link href="/environments" className="workspace-switcher" aria-label="Open environments">
-          <span>PL</span><p><strong>Platform team</strong><small>Sandbox workspace</small></p><Icon name="chevron" />
+          <span>{session?.organization.name.slice(0, 2).toUpperCase() ?? "PL"}</span><p><strong>{session?.organization.name ?? "Workspace"}</strong><small>{session?.project.name ?? "Sandbox project"}</small></p><Icon name="chevron" />
         </Link>
         <nav aria-label="Product navigation">
           {nav.map((item, index) => {
             const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(`${item.href}/`));
             return (
               <Link key={item.href} href={item.href} className={active ? "is-active" : ""} aria-current={active ? "page" : undefined}>
-                <Icon name={item.icon} /><span>{item.label}</span>{item.count ? <em>{item.count}</em> : null}{index === 4 ? <i /> : null}
+                <Icon name={item.icon} /><span>{item.label}</span>{item.label === "Findings" && openFindings ? <em>{openFindings}</em> : null}{index === 4 ? <i /> : null}
               </Link>
             );
           })}
           <button className="mobile-more-trigger" aria-label="More product navigation" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><Icon name="command"/><span>More</span></button>
         </nav>
         <div className="sidebar-foot">
-          <div className="user-avatar">AK</div><p><strong>Ayush Kumar</strong><small>Local owner</small></p>
+          <div className="user-avatar">{initials}</div><p><strong>{session?.user.email ?? "Signed in"}</strong><small>{session?.organization.role ?? "member"} · authenticated</small></p>
           <button aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}>•••</button>
-          {accountOpen ? <div className="account-menu" role="menu" aria-label="Account"><Link role="menuitem" href="/settings" onClick={() => setAccountOpen(false)}>Project settings</Link><Link role="menuitem" href="/" onClick={() => setAccountOpen(false)}>Return to website</Link></div> : null}
+          {accountOpen ? <div className="account-menu" role="menu" aria-label="Account"><Link role="menuitem" href="/settings" onClick={() => setAccountOpen(false)}>Project settings</Link><button role="menuitem" onClick={() => void signOut()}>Sign out</button></div> : null}
         </div>
       </aside>
 
       <section className="app-main">
         <header className="app-topbar">
           <div className="mobile-brand"><BrandMark compact /></div>
-          <Link href="/environments" className="environment-select"><span className="environment-dot" />Development <Icon name="chevron" /></Link>
+          <Link href="/environments" className="environment-select"><span className="environment-dot" />{selectedEnvironment} <Icon name="chevron" /></Link>
           <button className="command-trigger" onClick={() => setCommandOpen(true)} aria-haspopup="dialog"><Icon name="command" /><span>Search or run a command</span><kbd>⌘ K</kbd></button>
           <div className="app-topbar__right">
             <StatusPill tone={engineOnline ? "verified" : "neutral"}>{engineOnline ? "Engine online" : "Seeded preview"}</StatusPill>
-            <Link className="notification-button" aria-label="Notifications: 2 unread" href="/notifications"><span /></Link>
-            <button className="mobile-account-button" aria-label="Account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}>AK</button>
-            {accountOpen ? <div className="mobile-account-menu" role="menu" aria-label="Account"><Link role="menuitem" href="/settings" onClick={() => setAccountOpen(false)}>Project settings</Link><Link role="menuitem" href="/" onClick={() => setAccountOpen(false)}>Return to website</Link></div> : null}
+            <Link className="notification-button" aria-label={`Notifications: ${unreadNotifications} unread`} href="/notifications">{unreadNotifications ? <span /> : null}</Link>
+            <button className="mobile-account-button" aria-label="Account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}>{initials}</button>
+            {accountOpen ? <div className="mobile-account-menu" role="menu" aria-label="Account"><Link role="menuitem" href="/settings" onClick={() => setAccountOpen(false)}>Project settings</Link><button role="menuitem" onClick={() => void signOut()}>Sign out</button></div> : null}
           </div>
         </header>
+        {signOutError ? <div className="shell-alert" role="alert"><span>{signOutError}</span><button aria-label="Dismiss sign out error" onClick={() => setSignOutError("")}>×</button></div> : null}
         <div id="product-content">{children}</div>
       </section>
 
@@ -117,7 +155,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       ) : null}
-      {moreOpen ? <div className="mobile-more-menu" role="dialog" aria-modal="true" aria-label="More product navigation"><div className="mobile-more-menu__heading"><strong>Product</strong><button aria-label="Close more navigation" onClick={() => setMoreOpen(false)}>×</button></div><nav aria-label="More destinations">{nav.slice(3).map((item) => <Link key={item.href} href={item.href} onClick={() => setMoreOpen(false)}><Icon name={item.icon}/><span>{item.label}</span><Icon name="arrow"/></Link>)}<Link href="/notifications" onClick={() => setMoreOpen(false)}><Icon name="event"/><span>Notifications</span><Icon name="arrow"/></Link></nav><div className="mobile-more-menu__account"><span className="user-avatar">AK</span><span><strong>Ayush Kumar</strong><small>Local owner</small></span><Link href="/settings" onClick={() => setMoreOpen(false)}>Account settings</Link></div></div> : null}
+      {moreOpen ? <div className="mobile-more-menu" role="dialog" aria-modal="true" aria-label="More product navigation"><div className="mobile-more-menu__heading"><strong>Product</strong><button aria-label="Close more navigation" onClick={() => setMoreOpen(false)}>×</button></div><nav aria-label="More destinations">{nav.slice(3).map((item) => <Link key={item.href} href={item.href} onClick={() => setMoreOpen(false)}><Icon name={item.icon}/><span>{item.label}</span><Icon name="arrow"/></Link>)}<Link href="/notifications" onClick={() => setMoreOpen(false)}><Icon name="event"/><span>Notifications{unreadNotifications ? ` (${unreadNotifications})` : ""}</span><Icon name="arrow"/></Link></nav><div className="mobile-more-menu__account"><span className="user-avatar">{initials}</span><span><strong>{session?.user.email}</strong><small>{session?.organization.role ?? "member"} · authenticated</small></span><button onClick={() => void signOut()}>Sign out</button></div></div> : null}
     </main>
   );
 }

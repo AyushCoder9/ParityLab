@@ -8,42 +8,79 @@ function collectMutations(page: Page) {
   return mutations;
 }
 
-test.describe("persisted versus browser-local state boundaries", () => {
-  test("settings save is explicitly browser-local and sends no backend mutation", async ({ page }) => {
+test.describe("persisted product state boundaries", () => {
+  test("settings save uses the protected API and survives a browser reload", async ({ page }) => {
     const mutations = collectMutations(page);
     await page.goto("/settings");
-    await expect(page.getByText(/backend persistence and organization auth remain unavailable/i)).toBeVisible();
+    await page.getByLabel("Project name").fill("Reliability review");
+    await page.getByLabel("Evidence retention").selectOption("90");
+    await page.getByRole("button", { name: "Save changes" }).click();
 
-    await page.getByLabel("Workspace name").fill("Reliability review");
-    await page.getByRole("button", { name: "Save preview settings" }).click();
+    await expect(page.getByRole("status")).toContainText(/saved to ParityLab/i);
+    const writes = mutations.filter((request) => request.method() === "PATCH" && request.url().endsWith("/v1/settings/project"));
+    expect(writes).toHaveLength(1);
+    expect(writes[0].postDataJSON()).toEqual({ name: "Reliability review", retention_days: 90 });
 
-    await expect(page.getByRole("status")).toContainText(/saved in this browser/i);
-    expect(mutations, "browser-preview settings must not masquerade as a persisted API mutation").toEqual([]);
+    await page.reload();
+    await expect(page.getByLabel("Project name")).toHaveValue("Reliability review");
+    await expect(page.getByLabel("Evidence retention")).toHaveValue("90");
   });
 
-  test("finding and notification actions remain visibly seeded and local", async ({ page }) => {
+  test("finding and notification controls send explicit persisted mutations", async ({ page }) => {
     const mutations = collectMutations(page);
-    await page.route(/\/v1\//, (route) => route.abort("connectionfailed"));
+    let resolved = false;
+    let readAt: string | undefined;
+    const finding = {
+      id: "finding_browser_contract",
+      run_id: "run_browser_contract",
+      severity: "warning",
+      title: "Duplicate delivery observed",
+      summary: "The duplicate path was exercised.",
+      cause: "A retry delivered the same event twice.",
+      remediation: "Keep the merchant write idempotent.",
+      checkpoint: "merchant.write",
+      resolved,
+    };
+    await page.route(/\/v1\/findings(?:\/.*)?(?:\?.*)?$/, async (route) => {
+      if (route.request().method() === "GET") {
+        const url = new URL(route.request().url());
+        const status = url.searchParams.get("status");
+        const visible = !status || (status === "resolved" ? resolved : !resolved);
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ object: "list", data: visible ? [{ ...finding, resolved }] : [], has_more: false }) });
+      }
+      resolved = route.request().url().endsWith("/resolve");
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...finding, resolved }) });
+    });
+    await page.route(/\/v1\/notifications(?:\/.*)?$/, async (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ object: "list", data: [{ id: "notification_browser_contract", kind: "run.completed", payload: { title: "Run completed", detail: "Evidence is ready." }, read_at: readAt, created_at: "2026-07-19T00:00:00Z" }], has_more: false }) });
+      }
+      readAt = "2026-07-19T00:01:00Z";
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ updated: 1 }) });
+    });
+
     await page.goto("/findings");
-    await expect(page.getByText(/Engine unavailable — showing seeded preview/i)).toBeVisible();
-    await page.getByRole("button", { name: "Resolve for this session" }).first().click();
+    await page.getByRole("button", { name: "Mark resolved" }).click();
     await page.getByRole("button", { name: "Resolved", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Reopen for this session" }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reopen finding" })).toBeVisible();
 
     await page.goto("/notifications");
-    await expect(page.getByText(/Engine unavailable — showing seeded preview/i)).toBeVisible();
-    await page.getByRole("button", { name: "Mark all read" }).click();
-    await expect(page.getByRole("button", { name: "Mark all read" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Mark all read (1)" }).click();
+    await expect(page.getByText("All read", { exact: true })).toBeVisible();
 
-    expect(mutations, "seeded triage controls must not imply durable backend writes").toEqual([]);
+    expect(mutations.some((request) => request.method() === "POST" && request.url().endsWith("/v1/findings/finding_browser_contract/resolve"))).toBe(true);
+    expect(mutations.some((request) => request.method() === "POST" && request.url().endsWith("/v1/notifications/read-all"))).toBe(true);
   });
 
-  test("environment selection states that it affects only this browser preview", async ({ page }) => {
+  test("environment selection is persisted through the protected API", async ({ page }) => {
     const mutations = collectMutations(page);
     await page.goto("/environments");
-    await page.getByRole("button", { name: /Stripe Sandbox/ }).click();
-    await expect(page.getByRole("status")).toContainText(/affects this browser preview only/i);
-    expect(mutations).toEqual([]);
+    await page.getByRole("button", { name: /Staging/ }).click();
+    await expect(page.getByRole("status")).toContainText(/Staging selected/i);
+    expect(mutations.some((request) => request.method() === "POST" && /\/v1\/environments\/[^/]+\/select$/.test(request.url()))).toBe(true);
+
+    await page.reload();
+    await expect(page.getByRole("button", { name: /Staging/ })).toHaveAttribute("aria-pressed", "true");
   });
 
   test("onboarding explains the secure API handoff without collecting a secret", async ({ page }) => {
@@ -55,7 +92,7 @@ test.describe("persisted versus browser-local state boundaries", () => {
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
     await page.getByRole("button", { name: /continue to secure connection/i }).click();
     await expect(page.getByRole("heading", { name: /validate a restricted Sandbox key/i })).toBeVisible();
-    await expect(page.getByText(/posts the key directly to the API, clears the input immediately/i)).toBeVisible();
+    await expect(page.getByText(/(posts|sends) the key directly to the API, clears the input immediately/i)).toBeVisible();
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
     expect(mutations).toEqual([]);
   });

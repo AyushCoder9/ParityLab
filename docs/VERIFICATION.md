@@ -60,7 +60,7 @@ go test -v ./tests/contracts
 ## Deliberately not claimed
 
 - No real Stripe key was available, so Stripe Sandbox network calls were not executed.
-- WebKit and k6 were not run locally.
+- At this 2026-07-18 checkpoint, WebKit and k6 were not run locally. The later 2026-07-23 auth slice below includes a successful focused WebKit run; k6 remains outstanding.
 - The complete Compose dependency stack was not started against this shared Docker host.
 
 ## Real-product expansion ledger
@@ -88,7 +88,7 @@ Local results after the engine and UI integration slices landed:
 - `git diff --check` — pass.
 - `specs/mvp-product.spec.ts --project=chromium --workers=1` against web `localhost:3200` and PostgreSQL-backed API `127.0.0.1:18080` — 18/18 pass.
 - `specs/api.spec.ts --project=chromium --workers=1` against the same API — 3/3 pass, including the new run-ledger list contract.
-- `specs/state-boundaries.spec.ts --project=chromium --workers=1` — 7/7 pass, covering browser/session-local non-mutations, sanitized Stripe connection handoff, frozen PaymentIntent request wiring, and live-versus-seeded labeling.
+- At the 2026-07-19 checkpoint, `specs/state-boundaries.spec.ts --project=chromium --workers=1` passed 7/7 for the then-browser-local mutation boundary, sanitized Stripe connection handoff, frozen PaymentIntent request wiring, and live-versus-seeded labeling. The 2026-07-23 auth/resource slice supersedes that browser-local boundary with protected durable APIs.
 - `tests/scripts/verify-openapi-contract.sh` — pass for both Stripe endpoints, write-only secret input, sanitized output, integer minor units, and lowercase currency.
 - `PARITYLAB_CONFIRM_FRESH=1 tests/scripts/persistence-restart.sh` — pass; printed `persistence restart contract passed for run_000005`, exit 0.
 - Targeted mobile portability rerun against web `127.0.0.1:3200`, PostgreSQL-backed API `127.0.0.1:18082`, and Stripe mock `127.0.0.1:12112` — 7/7 pass.
@@ -105,3 +105,40 @@ Harness repair history before the final pass:
 5. Concurrent invocations against the fixed Compose project were stopped; the root agent owned the final single authoritative run.
 
 The persistence test is isolated from development data. Its destructive operations are limited to the explicit Compose project `paritylab-persistence-contract` and its dedicated volumes, and require `PARITYLAB_CONFIRM_FRESH=1`.
+
+## Authentication, tenancy, and protected resources
+
+Date: 2026-07-23
+
+- `PARITYLAB_CONFIRM_FRESH=1 tests/scripts/auth-resource-restart.sh` — exit 0 with `auth security and restart contract passed`; the dedicated containers, network, and volumes were absent after cleanup.
+- `auth-product.spec.ts`, `auth-security.spec.ts`, and `state-boundaries.spec.ts` against the fresh PostgreSQL/API/strict-Stripe-mock stack — Chromium 17/17 passed in 11.6 seconds.
+- The same three suites using Playwright WebKit 26.5 build 2311 — WebKit 17/17 passed in 27.5 seconds. The pinned WebKit runtime was installed after an initial launch-only missing-runtime result; no application assertion failed in that initial attempt.
+
+The auth restart run used only the dedicated Compose project `paritylab-auth-security-contract`, a fresh PostgreSQL database, the rebuilt API, and the strict local Stripe server. Its detailed coverage was:
+
+- production/default `Secure`, `HttpOnly`, `SameSite=Lax`, 24-hour session-cookie attributes and the explicit loopback HTTP cookie mode;
+- sanitized account registration, owner organization/project/default-environment creation, and no password/hash in the response;
+- anonymous denial before protected Stripe validation/execution;
+- identical public error content for known/unknown invalid login, bounded burst throttling, 429 `Retry-After`, and dummy-hash behavior through focused auth tests;
+- durable project name/retention, selected environment, finding resolution, notification read state, sanitized Stripe connection, and tenant PaymentIntent execution;
+- cross-tenant 404 for another project’s connection, environment, finding, and notification;
+- 403 for a foreign-Origin cookie mutation;
+- 401 for an expired session, persistence of tenant state across API restart, and 401 for the explicitly revoked logout cookie;
+- API-log absence of the password sentinel, Stripe test secret, and both opaque session tokens.
+
+Supporting gates for the slice:
+
+```bash
+pnpm --filter @paritylab/web lint
+pnpm --filter @paritylab/web test
+NEXT_PUBLIC_PARITYLAB_API_URL=http://127.0.0.1:8080 pnpm --filter @paritylab/web build
+pnpm --filter @paritylab/e2e typecheck
+tests/scripts/verify-config.sh
+tests/scripts/verify-openapi-contract.sh
+sh -n tests/scripts/*.sh
+git diff --check
+```
+
+The final production audit initially identified newly published advisories affecting Next.js 16.2.10 and Next's inherited Sharp 0.34.5/libvips path. Next.js was upgraded to 16.2.11 and the workspace now overrides Sharp to 0.35.3; `pnpm audit --prod` then returned `No known vulnerabilities found`. `govulncheck ./...` also found a reachable `golang.org/x/text` 0.29.0 issue through PostgreSQL connection parsing; upgrading `x/text` to 0.39.0 and the compatible `x/sync` dependency produced `No vulnerabilities found`. `make verify`, `go vet ./...`, `go test -race ./...`, configuration/OpenAPI checks, shell syntax, and diff checks all remained green after those dependency repairs.
+
+The authenticated UI static gates, E2E TypeScript validation, isolated auth/restart contract, and integrated Chromium/WebKit browser contracts are green. No real Stripe account was contacted; the Stripe portion used the strict local mock. The webhook-domain consumer, remaining real scenario executors, long-lived database-backed SSE, and hosted deployment are still unfinished.

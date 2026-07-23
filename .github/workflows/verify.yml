@@ -135,6 +135,17 @@ jobs:
           PARITYLAB_CONFIRM_FRESH: "1"
         run: tests/scripts/persistence-restart.sh
 
+  auth-persistence:
+    name: Auth, tenant, and protected-resource restart contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove hardened sessions and tenant state survive restart
+        env:
+          PARITYLAB_CONFIRM_FRESH: "1"
+        run: tests/scripts/auth-resource-restart.sh
+
   compose:
     name: Compose validation
     runs-on: ubuntu-latest

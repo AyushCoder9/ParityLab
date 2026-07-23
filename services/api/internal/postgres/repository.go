@@ -56,13 +56,21 @@ func (r *Repository) NextRunID(ctx context.Context) (string, error) {
 }
 
 func (r *Repository) ReplayRun(ctx context.Context, keyHash, requestHash [sha256.Size]byte) (domain.Run, bool, error) {
+	return r.replayRun(ctx, "runs:create", keyHash, requestHash)
+}
+
+func (r *Repository) ReplayRunForProject(ctx context.Context, projectID string, keyHash, requestHash [sha256.Size]byte) (domain.Run, bool, error) {
+	return r.replayRun(ctx, projectRunScope(projectID), keyHash, requestHash)
+}
+
+func (r *Repository) replayRun(ctx context.Context, scope string, keyHash, requestHash [sha256.Size]byte) (domain.Run, bool, error) {
 	var storedRequest []byte
 	var storedResponse []byte
 	err := r.pool.QueryRow(ctx, `
 		SELECT request_sha256, response_body
 		FROM idempotency_records
-		WHERE scope = 'runs:create' AND idempotency_key_hash = $1 AND expires_at > now()
-	`, keyHash[:]).Scan(&storedRequest, &storedResponse)
+		WHERE scope = $1 AND idempotency_key_hash = $2 AND expires_at > now()
+	`, scope, keyHash[:]).Scan(&storedRequest, &storedResponse)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Run{}, false, nil
 	}
@@ -80,6 +88,18 @@ func (r *Repository) ReplayRun(ctx context.Context, keyHash, requestHash [sha256
 }
 
 func (r *Repository) CreateRun(ctx context.Context, keyHash, requestHash [sha256.Size]byte, bundle engine.RunBundle) (domain.Run, bool, error) {
+	return r.createRun(ctx, nil, "runs:create", keyHash, requestHash, bundle)
+}
+
+func (r *Repository) CreateRunForProject(ctx context.Context, projectID string, keyHash, requestHash [sha256.Size]byte, bundle engine.RunBundle) (domain.Run, bool, error) {
+	return r.createRun(ctx, &projectID, projectRunScope(projectID), keyHash, requestHash, bundle)
+}
+
+func projectRunScope(projectID string) string {
+	return "projects:" + projectID + ":runs:create"
+}
+
+func (r *Repository) createRun(ctx context.Context, projectID *string, scope string, keyHash, requestHash [sha256.Size]byte, bundle engine.RunBundle) (domain.Run, bool, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return domain.Run{}, false, err
@@ -95,8 +115,8 @@ func (r *Repository) CreateRun(ctx context.Context, keyHash, requestHash [sha256
 	err = tx.QueryRow(ctx, `
 		SELECT request_sha256, response_body
 		FROM idempotency_records
-		WHERE scope = 'runs:create' AND idempotency_key_hash = $1 AND expires_at > now()
-	`, keyHash[:]).Scan(&storedRequest, &storedResponse)
+		WHERE scope = $1 AND idempotency_key_hash = $2 AND expires_at > now()
+	`, scope, keyHash[:]).Scan(&storedRequest, &storedResponse)
 	if err == nil {
 		if !bytes.Equal(storedRequest, requestHash[:]) {
 			return domain.Run{}, false, engine.ErrIdempotencyConflict
@@ -122,12 +142,12 @@ func (r *Repository) CreateRun(ctx context.Context, keyHash, requestHash [sha256
 		INSERT INTO runs (
 			id, scenario_id, scenario_name, fault, status, score, environment,
 			stripe_object_id, merchant_order_id, started_at, completed_at,
-			duration_ms, event_count, finding_count, recovered, snapshot
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			duration_ms, event_count, finding_count, recovered, snapshot, project_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 	`, bundle.Run.ID, bundle.Run.ScenarioID, bundle.Run.ScenarioName, bundle.Run.Fault,
 		bundle.Run.Status, bundle.Run.Score, bundle.Run.Environment, bundle.Run.StripeObjectID,
 		bundle.Run.MerchantOrderID, bundle.Run.StartedAt, bundle.Run.CompletedAt,
-		bundle.Run.DurationMS, bundle.Run.EventCount, bundle.Run.FindingCount, bundle.Run.Recovered, runJSON)
+		bundle.Run.DurationMS, bundle.Run.EventCount, bundle.Run.FindingCount, bundle.Run.Recovered, runJSON, projectID)
 	if err != nil {
 		return domain.Run{}, false, fmt.Errorf("insert run: %w", err)
 	}
@@ -164,12 +184,52 @@ func (r *Repository) CreateRun(ctx context.Context, keyHash, requestHash [sha256
 	if err != nil {
 		return domain.Run{}, false, fmt.Errorf("insert report: %w", err)
 	}
+	for _, assertion := range bundle.Report.Assertions {
+		evidence, marshalErr := json.Marshal(map[string]string{"value": assertion.Evidence})
+		if marshalErr != nil {
+			return domain.Run{}, false, marshalErr
+		}
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO assertions (id, run_id, name, passed, expected, observed, evidence)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			ON CONFLICT (run_id, id) DO NOTHING
+		`, assertion.ID, bundle.Run.ID, assertion.Name, assertion.Passed, assertion.Expected, assertion.Observed, evidence); err != nil {
+			return domain.Run{}, false, fmt.Errorf("insert assertion: %w", err)
+		}
+	}
+	for _, finding := range bundle.Report.Findings {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO findings (id, run_id, severity, title, summary, checkpoint, cause, remediation, resolved)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			ON CONFLICT (run_id, id) DO NOTHING
+		`, finding.ID, bundle.Run.ID, finding.Severity, finding.Title, finding.Summary, finding.Checkpoint,
+			finding.Cause, finding.Remediation, finding.Resolved); err != nil {
+			return domain.Run{}, false, fmt.Errorf("insert finding: %w", err)
+		}
+	}
+	if projectID != nil {
+		notificationPayload, marshalErr := json.Marshal(map[string]any{
+			"run_id": bundle.Run.ID, "scenario_name": bundle.Run.ScenarioName, "status": bundle.Run.Status,
+		})
+		if marshalErr != nil {
+			return domain.Run{}, false, marshalErr
+		}
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO notifications (project_id, run_id, kind, payload)
+			VALUES ($1,$2,$3,$4)
+		`, *projectID, bundle.Run.ID, "run.completed", notificationPayload); err != nil {
+			return domain.Run{}, false, fmt.Errorf("insert notification: %w", err)
+		}
+		if err = insertAudit(ctx, tx, *projectID, "", "run.created", "run", bundle.Run.ID, map[string]any{"scenario_id": bundle.Run.ScenarioID}); err != nil {
+			return domain.Run{}, false, fmt.Errorf("insert run audit: %w", err)
+		}
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO idempotency_records (
 			scope, idempotency_key_hash, request_sha256, response_status,
 			response_body, expires_at
-		) VALUES ('runs:create',$1,$2,201,$3,now() + interval '24 hours')
-	`, keyHash[:], requestHash[:], runJSON)
+		) VALUES ($1,$2,$3,201,$4,now() + interval '24 hours')
+	`, scope, keyHash[:], requestHash[:], runJSON)
 	if err != nil {
 		return domain.Run{}, false, fmt.Errorf("insert idempotency record: %w", err)
 	}
@@ -201,7 +261,43 @@ func (r *Repository) Run(ctx context.Context, id string) (domain.Run, bool, erro
 	return scanRun(r.pool.QueryRow(ctx, `SELECT snapshot FROM runs WHERE id = $1`, id))
 }
 
+func (r *Repository) RunForProject(ctx context.Context, projectID, id string) (domain.Run, bool, error) {
+	return scanRun(r.pool.QueryRow(ctx, `SELECT snapshot FROM runs WHERE id = $1 AND project_id = $2`, id, projectID))
+}
+
+func (r *Repository) PublicRun(ctx context.Context, id string) (domain.Run, bool, error) {
+	return scanRun(r.pool.QueryRow(ctx, `SELECT snapshot FROM runs WHERE id = $1 AND project_id IS NULL`, id))
+}
+
 func (r *Repository) Events(ctx context.Context, id string) ([]domain.Event, bool, error) {
+	return r.events(ctx, id, nil)
+}
+
+func (r *Repository) EventsForProject(ctx context.Context, projectID, id string) ([]domain.Event, bool, error) {
+	return r.events(ctx, id, &projectID)
+}
+
+func (r *Repository) PublicEvents(ctx context.Context, id string) ([]domain.Event, bool, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE id = $1 AND project_id IS NULL)`, id).Scan(&exists); err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return []domain.Event{}, false, nil
+	}
+	return r.events(ctx, id, nil)
+}
+
+func (r *Repository) events(ctx context.Context, id string, projectID *string) ([]domain.Event, bool, error) {
+	if projectID != nil {
+		var exists bool
+		if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE id = $1 AND project_id = $2)`, id, *projectID).Scan(&exists); err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return []domain.Event{}, false, nil
+		}
+	}
 	rows, err := r.pool.Query(ctx, `SELECT snapshot FROM run_events WHERE run_id = $1 ORDER BY sequence`, id)
 	if err != nil {
 		return nil, false, err
@@ -233,8 +329,41 @@ func (r *Repository) Events(ctx context.Context, id string) ([]domain.Event, boo
 }
 
 func (r *Repository) Report(ctx context.Context, id string) (domain.Report, bool, error) {
+	return r.report(ctx, id, nil)
+}
+
+func (r *Repository) ReportForProject(ctx context.Context, projectID, id string) (domain.Report, bool, error) {
+	return r.report(ctx, id, &projectID)
+}
+
+func (r *Repository) PublicReport(ctx context.Context, id string) (domain.Report, bool, error) {
 	var raw []byte
-	err := r.pool.QueryRow(ctx, `SELECT snapshot FROM reports WHERE run_id = $1`, id).Scan(&raw)
+	err := r.pool.QueryRow(ctx, `
+		SELECT rp.snapshot FROM reports rp JOIN runs r ON r.id = rp.run_id
+		WHERE rp.run_id = $1 AND r.project_id IS NULL
+	`, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Report{}, false, nil
+	}
+	if err != nil {
+		return domain.Report{}, false, err
+	}
+	var report domain.Report
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return domain.Report{}, false, err
+	}
+	return report, true, nil
+}
+
+func (r *Repository) report(ctx context.Context, id string, projectID *string) (domain.Report, bool, error) {
+	var raw []byte
+	query := `SELECT rp.snapshot FROM reports rp JOIN runs r ON r.id = rp.run_id WHERE rp.run_id = $1`
+	args := []any{id}
+	if projectID != nil {
+		query += ` AND r.project_id = $2`
+		args = append(args, *projectID)
+	}
+	err := r.pool.QueryRow(ctx, query, args...).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Report{}, false, nil
 	}
@@ -249,7 +378,43 @@ func (r *Repository) Report(ctx context.Context, id string) (domain.Report, bool
 }
 
 func (r *Repository) ListRuns(ctx context.Context) ([]domain.Run, error) {
-	rows, err := r.pool.Query(ctx, `SELECT snapshot FROM runs ORDER BY started_at DESC`)
+	return r.listRuns(ctx, nil)
+}
+
+func (r *Repository) ListRunsForProject(ctx context.Context, projectID string) ([]domain.Run, error) {
+	return r.listRuns(ctx, &projectID)
+}
+
+func (r *Repository) ListPublicRuns(ctx context.Context) ([]domain.Run, error) {
+	rows, err := r.pool.Query(ctx, `SELECT snapshot FROM runs WHERE project_id IS NULL ORDER BY started_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.Run, 0)
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var item domain.Run
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *Repository) listRuns(ctx context.Context, projectID *string) ([]domain.Run, error) {
+	query := `SELECT snapshot FROM runs`
+	args := []any{}
+	if projectID != nil {
+		query += ` WHERE project_id = $1`
+		args = append(args, *projectID)
+	}
+	query += ` ORDER BY started_at DESC`
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -374,6 +539,44 @@ func (r *Repository) SaveStripeConnection(ctx context.Context, connection engine
 	return stored, nil
 }
 
+func (r *Repository) SaveStripeConnectionForProject(ctx context.Context, projectID string, connection engine.StripeConnection) (engine.StripeConnection, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return engine.StripeConnection{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var stored engine.StripeConnection
+	err = tx.QueryRow(ctx, `
+		INSERT INTO stripe_connections (
+			id, project_id, stripe_account_id, sandbox_name, secret_ciphertext,
+			secret_key_version, status, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+		ON CONFLICT (project_id, stripe_account_id) DO UPDATE SET
+			sandbox_name = EXCLUDED.sandbox_name,
+			secret_ciphertext = EXCLUDED.secret_ciphertext,
+			secret_key_version = EXCLUDED.secret_key_version,
+			status = EXCLUDED.status,
+			updated_at = now()
+		RETURNING id::text, stripe_account_id, sandbox_name, status, created_at,
+			secret_ciphertext, secret_key_version
+	`, connection.ID, projectID, connection.StripeAccountID, connection.SandboxName,
+		connection.SecretCiphertext, connection.SecretEncryptionKeyID, connection.Status,
+		connection.CreatedAt).Scan(
+		&stored.ID, &stored.StripeAccountID, &stored.SandboxName, &stored.Status,
+		&stored.CreatedAt, &stored.SecretCiphertext, &stored.SecretEncryptionKeyID,
+	)
+	if err != nil {
+		return engine.StripeConnection{}, err
+	}
+	if err := insertAudit(ctx, tx, projectID, "", "connection.validated", "stripe_connection", stored.ID, map[string]any{"stripe_account_id": stored.StripeAccountID}); err != nil {
+		return engine.StripeConnection{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return engine.StripeConnection{}, err
+	}
+	return stored, nil
+}
+
 func (r *Repository) StripeConnection(ctx context.Context, id string) (engine.StripeConnection, bool, error) {
 	var connection engine.StripeConnection
 	err := r.pool.QueryRow(ctx, `
@@ -389,6 +592,43 @@ func (r *Repository) StripeConnection(ctx context.Context, id string) (engine.St
 		return engine.StripeConnection{}, false, nil
 	}
 	return connection, err == nil, err
+}
+
+func (r *Repository) StripeConnectionForProject(ctx context.Context, projectID, id string) (engine.StripeConnection, bool, error) {
+	var connection engine.StripeConnection
+	err := r.pool.QueryRow(ctx, `
+		SELECT id::text, stripe_account_id, sandbox_name, status, created_at,
+			secret_ciphertext, secret_key_version
+		FROM stripe_connections WHERE id = $1 AND project_id = $2
+	`, id, projectID).Scan(
+		&connection.ID, &connection.StripeAccountID, &connection.SandboxName,
+		&connection.Status, &connection.CreatedAt, &connection.SecretCiphertext,
+		&connection.SecretEncryptionKeyID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return engine.StripeConnection{}, false, nil
+	}
+	return connection, err == nil, err
+}
+
+func (r *Repository) ListStripeConnectionsForProject(ctx context.Context, projectID string) ([]engine.StripeConnection, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, stripe_account_id, sandbox_name, status, created_at
+		FROM stripe_connections WHERE project_id = $1 ORDER BY created_at DESC
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]engine.StripeConnection, 0)
+	for rows.Next() {
+		var item engine.StripeConnection
+		if err := rows.Scan(&item.ID, &item.StripeAccountID, &item.SandboxName, &item.Status, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (r *Repository) ClaimOutbox(ctx context.Context, owner string, lease time.Duration, topics []string) (engine.OutboxMessage, bool, error) {

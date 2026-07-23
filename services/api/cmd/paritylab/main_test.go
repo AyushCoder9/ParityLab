@@ -28,3 +28,30 @@ func TestStripeAPIBaseRequiresExplicitMockMode(t *testing.T) {
 		t.Fatalf("base=%q err=%v", got, err)
 	}
 }
+
+func TestInsecureCookiesRequireLoopbackHTTPOrigin(t *testing.T) {
+	t.Setenv("PARITYLAB_INSECURE_COOKIES", "true")
+	for _, origin := range []string{
+		"http://127.0.0.1:3000",
+		"http://localhost:3000",
+		"http://[::1]:3000",
+	} {
+		if insecure, err := configuredCookiePolicy(origin); err != nil || !insecure {
+			t.Fatalf("origin=%q insecure=%v err=%v", origin, insecure, err)
+		}
+	}
+	for _, origin := range []string{
+		"https://127.0.0.1:3000",
+		"http://example.com",
+		"https://example.com",
+		"not-a-url",
+	} {
+		if insecure, err := configuredCookiePolicy(origin); err == nil || insecure {
+			t.Fatalf("accepted non-loopback origin=%q insecure=%v err=%v", origin, insecure, err)
+		}
+	}
+	t.Setenv("PARITYLAB_INSECURE_COOKIES", "false")
+	if insecure, err := configuredCookiePolicy("https://paritylab.example"); err != nil || insecure {
+		t.Fatalf("secure default insecure=%v err=%v", insecure, err)
+	}
+}

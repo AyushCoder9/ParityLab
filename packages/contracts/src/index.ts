@@ -112,6 +112,36 @@ export interface StripeConnection {
   created_at: string;
 }
 
+export interface SessionView {
+  authenticated: true;
+  user: { id: string; email: string };
+  organization: { id: string; name: string; role: "owner" | "admin" | "member" | "viewer" };
+  project: ProjectSettings;
+  expires_at: string;
+}
+
+export interface ProjectSettings {
+  id: string;
+  name: string;
+  retention_days: number;
+}
+
+export interface Environment {
+  id: string;
+  name: string;
+  kind: "local" | "sandbox" | "staging";
+  is_default: boolean;
+}
+
+export interface Notification {
+  id: string;
+  run_id?: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  read_at?: string | null;
+  created_at: string;
+}
+
 export interface APIError {
   error: {
     type: string;
@@ -129,7 +159,21 @@ export const API_PATHS = {
   runs: "/v1/runs",
   validateStripeConnection: "/v1/connections/stripe/validate",
   stripePaymentIntents: "/v1/stripe/payment-intents",
+  register: "/v1/auth/register",
+  login: "/v1/auth/login",
+  logout: "/v1/auth/logout",
+  session: "/v1/session",
+  projectSettings: "/v1/settings/project",
+  environments: "/v1/environments",
+  findings: "/v1/findings",
+  notifications: "/v1/notifications",
+  connections: "/v1/connections",
   run: (id: string) => `/v1/runs/${encodeURIComponent(id)}`,
   events: (id: string) => `/v1/runs/${encodeURIComponent(id)}/events`,
   report: (id: string) => `/v1/runs/${encodeURIComponent(id)}/report`,
+  selectEnvironment: (id: string) => `/v1/environments/${encodeURIComponent(id)}/select`,
+  resolveFinding: (id: string) => `/v1/findings/${encodeURIComponent(id)}/resolve`,
+  reopenFinding: (id: string) => `/v1/findings/${encodeURIComponent(id)}/reopen`,
+  markNotificationRead: (id: string) => `/v1/notifications/${encodeURIComponent(id)}/read`,
+  markAllNotificationsRead: "/v1/notifications/read-all",
 } as const;

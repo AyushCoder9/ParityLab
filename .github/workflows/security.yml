@@ -23,6 +23,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +67,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Filesystem and configuration scan
-        uses: aquasecurity/trivy-action@0.32.0
+        # Pinned to the verified-safe commit for v0.35.0, not a mutable tag: in
+        # March 2026 an attacker force-pushed 76 of 77 trivy-action version
+        # tags (including the previously-pinned 0.32.0) to malware-serving
+        # commits. v0.35.0 was the only tag left untouched. Do not move this
+        # back to a bare version tag — see aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23.
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: fs
           scan-ref: .

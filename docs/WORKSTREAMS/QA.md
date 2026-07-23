@@ -134,3 +134,10 @@ sh -n tests/scripts/*.sh
 ```
 
 The authenticated browser lane and independent restart/security harness are both green. Hosted HTTPS acceptance and a real Stripe Sandbox credential run remain separate gates.
+
+## 2026-07-23 CI fix: Dependencies and source job
+
+- Root cause from Actions job `89318185149`: `.github/workflows/security.yml` referenced `aquasecurity/trivy-action@0.32.0`, and GitHub Actions could not resolve that ref.
+- Minimal fix: switched to the valid tag ref `aquasecurity/trivy-action@v0.32.0`.
+- Verification command and outcome:
+  - `go run github.com/rhysd/actionlint/cmd/actionlint@latest .github/workflows/security.yml` — exit 0.

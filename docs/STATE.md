@@ -80,5 +80,5 @@ See `docs/VERIFICATION.md` and `docs/WORKSTREAMS/*.md` for the command ledger an
 
 - Active repository: `/Users/ayushkumarsingh/Documents/Codex/2026-07-18-here-is-the-stripe-internship-details/ParityLab`
 - Desktop mirror target: `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`
-- Last committed green implementation checkpoint: `8040909` (`feat: build durable Stripe verification MVP`); handoff documentation checkpoint: `4a2b9b8`.
-- The completed authentication/resource slice is present in the active worktree and awaiting the root integration commit and mirror refresh.
+- Latest committed green implementation checkpoint: `68ca779` (`feat: add secure tenant-aware product workflows`).
+- The Desktop mirror is refreshed from this checkpoint at handoff.

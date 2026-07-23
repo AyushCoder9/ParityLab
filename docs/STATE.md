@@ -81,5 +81,5 @@ See `docs/VERIFICATION.md` and `docs/WORKSTREAMS/*.md` for the command ledger an
 
 - Active repository: `/Users/ayushkumarsingh/Documents/Codex/2026-07-18-here-is-the-stripe-internship-details/ParityLab`
 - Desktop mirror target: `/Users/ayushkumarsingh/Desktop/PROJECTS/SideProjects/ParityLab`
-- Latest committed green implementation checkpoint: `68ca779` (`feat: add secure tenant-aware product workflows`).
+- Latest committed green implementation checkpoint: `76d7da0` (`feat: correlate durable Stripe webhooks`).
 - The Desktop mirror is refreshed from this checkpoint at handoff.

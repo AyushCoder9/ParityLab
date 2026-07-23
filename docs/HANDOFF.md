@@ -88,4 +88,4 @@ The opt-in Stripe vertical E2E requires the isolated strict Stripe mock stack do
 
 ## Workspace truth
 
-The active Git repository is the Documents/Codex path above. The Desktop path is a handoff mirror refreshed from green implementation checkpoint `68ca779`. If the two differ, prefer the Git repository whose `docs/STATE.md` names the newest green implementation commit.
+The active Git repository is the Documents/Codex path above. The Desktop path is a handoff mirror refreshed from green implementation checkpoint `76d7da0`. If the two differ, prefer the Git repository whose `docs/STATE.md` names the newest green implementation commit.

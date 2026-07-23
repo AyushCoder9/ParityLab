@@ -80,8 +80,12 @@ test.describe("real product route map", () => {
 
 test.describe("truthful runtime and working controls", () => {
   test("API outage is explicit and never presented as live", async ({ page }) => {
+    // Deliberately let /v1/session through: this test simulates the engine
+    // going offline for an already-authenticated user, not a session-check
+    // outage (that's auth-product.spec.ts's "session-check outage" test,
+    // which asserts the opposite — an explicit gate — for that distinct case).
     await page.route(/\/healthz(?:\?.*)?$/, (route) => route.abort("connectionfailed"));
-    await page.route(/\/v1\//, (route) => route.abort("connectionfailed"));
+    await page.route(/\/v1\/(?!session)/, (route) => route.abort("connectionfailed"));
     await page.goto("/dashboard");
 
     await expect(page.getByText(/Engine unavailable — showing seeded preview/i).first()).toBeVisible();

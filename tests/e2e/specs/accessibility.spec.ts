@@ -42,7 +42,12 @@ test("reduced motion removes long-running CSS motion", async ({ page }) => {
   expect(offenders, `Motion remains under prefers-reduced-motion: ${offenders.join(", ")}`).toEqual([]);
 });
 
-test("principal navigation is keyboard reachable", async ({ page }) => {
+test("principal navigation is keyboard reachable", async ({ page, browserName }) => {
+  // Real Safari/WebKit does not include <a> elements in the default Tab order
+  // without "Full Keyboard Access" enabled — this isn't a Playwright quirk or
+  // an app bug, it's actual platform behavior, so this check only applies to
+  // engines where Tab-to-links reflects a real user's experience.
+  test.skip(browserName === "webkit", "WebKit excludes links from the default Tab order without Full Keyboard Access");
   await page.goto("/");
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "ParityLab home" })).toBeFocused();
@@ -55,6 +60,11 @@ test("product routes fit a narrow viewport without horizontal overflow", async (
   await page.setViewportSize({ width: 390, height: 844 });
   for (const route of routes.filter((path) => !["/", "/demo"].includes(path))) {
     await page.goto(route);
+    // /login (already-authenticated in this shared session) kicks off its own
+    // getSession()-then-redirect-to-/dashboard effect; without waiting for it
+    // to settle, that redirect can still be in flight when the next iteration
+    // navigates elsewhere, aborting that navigation out from under us.
+    await page.waitForLoadState("networkidle");
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow, `${route} overflows the mobile viewport`).toBeLessThanOrEqual(1);
   }

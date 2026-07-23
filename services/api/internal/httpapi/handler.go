@@ -218,8 +218,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.config.Auth != nil && r.Method != http.MethodGet && r.Method != http.MethodHead &&
 		!strings.HasPrefix(r.URL.Path, "/hooks/stripe/") && r.Header.Get("Origin") != h.config.WebOrigin {
-		h.writeError(w, r, domain.Forbidden("csrf_origin_invalid", "The request origin is not allowed."))
-		return
+		// CSRF only matters when a cookie gives the request ambient authority
+		// it wouldn't otherwise have; a request with no session cookie at all
+		// carries none, so there's nothing for a forged cross-site request to
+		// exploit. Blocking it anyway made anonymous/programmatic mutations
+		// (the public API contract's unauthenticated run creation, for one)
+		// indistinguishable from an actual CSRF attempt.
+		if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+			h.writeError(w, r, domain.Forbidden("csrf_origin_invalid", "The request origin is not allowed."))
+			return
+		}
 	}
 	h.mux.ServeHTTP(w, r)
 }
@@ -259,9 +267,14 @@ type createRunRequest struct {
 }
 
 func (h *Handler) createRun(w http.ResponseWriter, r *http.Request) {
-	identity, ok := h.requireSession(w, r)
-	if !ok && h.config.Auth != nil {
-		return
+	var identity auth.SessionView
+	var authenticated bool
+	if h.config.Auth != nil {
+		var valid bool
+		identity, authenticated, valid = h.optionalSession(w, r)
+		if !valid {
+			return
+		}
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
 	if err != nil {
@@ -282,7 +295,7 @@ func (h *Handler) createRun(w http.ResponseWriter, r *http.Request) {
 	var run domain.Run
 	var replayed bool
 	var apiErr *domain.Error
-	if h.config.Auth != nil {
+	if authenticated {
 		run, replayed, apiErr = h.engine.CreateRunForProject(identity.Project.ID, input.ScenarioID, input.Fault, r.Header.Get("Idempotency-Key"), body)
 	} else {
 		run, replayed, apiErr = h.engine.CreateRun(input.ScenarioID, input.Fault, r.Header.Get("Idempotency-Key"), body)

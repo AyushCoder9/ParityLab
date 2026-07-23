@@ -292,12 +292,12 @@
   .forensic-progress { height: 1px; background: var(--line-dark); overflow: hidden; }
   .forensic-progress span { display: block; width: 100%; height: 100%; transform-origin: left; background: var(--verified); will-change: transform; }
   .forensic-chapters { list-style: none; margin: 0; padding: 35svh 0; }
-  .forensic-chapters li { min-height: 60svh; display: grid; grid-template-columns: 2rem 1fr; gap: 1.2rem; align-content: center; color: color-mix(in oklch, var(--ink-inverse) 55%, var(--canvas-dark)); transition: color 500ms var(--ease-state), transform 600ms var(--ease-out), opacity 500ms ease; opacity: .7; transform: translateY(1.5rem); }
+  .forensic-chapters li { min-height: 60svh; display: grid; grid-template-columns: 2rem 1fr; gap: 1.2rem; align-content: center; color: color-mix(in oklch, var(--ink-inverse) 78%, var(--canvas-dark)); transition: color 500ms var(--ease-state), transform 600ms var(--ease-out), opacity 500ms ease; opacity: .85; transform: translateY(1.5rem); }
   .forensic-chapters li.is-active { color: var(--ink-inverse); opacity: 1; transform: none; }
   .forensic-chapters li.is-passed { color: color-mix(in oklch, var(--verified) 65%, var(--ink-inverse)); opacity: .65; transform: none; }
   .forensic-chapters .mono { padding-top: .35rem; font-size: .6rem; }
   .forensic-chapters h3 { max-width: 12ch; font-size: clamp(2rem, 3vw, 3.4rem); }
-  .forensic-chapters p { max-width: 31rem; margin-top: 1rem; color: color-mix(in oklch, currentColor 68%, var(--canvas-dark)); font-size: .8rem; line-height: 1.75; }
+  .forensic-chapters p { max-width: 31rem; margin-top: 1rem; color: color-mix(in oklch, currentColor 90%, var(--canvas-dark)); font-size: .8rem; line-height: 1.75; }
 }
 
 @layer responsive {
@@ -573,7 +573,7 @@
   .hero-foot i::after { content: ""; position: absolute; inset: 0; background: var(--primary); animation: scrollLine 2.1s var(--ease-out) infinite; }
 
   .truth-strip { min-height: 68svh; padding: 12vh max(2rem, calc((100vw - 1360px) / 2)); display: flex; flex-direction: column; justify-content: center; background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .truth-strip p { font-size: clamp(2.3rem, 5vw, 5rem); line-height: 1.03; letter-spacing: -.04em; color: color-mix(in oklch, var(--ink) 30%, var(--surface)); }
+  .truth-strip p { font-size: clamp(2.3rem, 5vw, 5rem); line-height: 1.03; letter-spacing: -.04em; color: color-mix(in oklch, var(--ink) 55%, var(--surface)); }
   .truth-strip p:last-child { align-self: flex-end; text-align: right; color: var(--ink); margin-top: .3em; }
   .truth-strip strong { color: var(--primary); font-weight: 560; }
 
@@ -649,7 +649,7 @@
   .evidence-finding h3 { font-size: clamp(2.5rem, 5vw, 5rem); margin-top: 1rem; }
   .evidence-finding > p:last-child { max-width: 38rem; color: var(--muted); margin-top: 1.5rem; }
   .state-diff { background: var(--canvas-dark); color: var(--ink-inverse); padding: 3rem; display: flex; flex-direction: column; justify-content: center; }
-  .state-diff > span { font-size: .68rem; color: color-mix(in oklch, var(--ink-inverse) 53%, var(--canvas-dark)); margin-top: 1.5rem; }
+  .state-diff > span { font-size: .68rem; color: color-mix(in oklch, var(--ink-inverse) 65%, var(--canvas-dark)); margin-top: 1.5rem; }
   .state-diff code { margin-top: .4rem; padding: .8rem; background: var(--surface-dark); color: var(--verified); font-family: "Martian Mono", monospace; font-size: .78rem; }
   .state-diff div { display: flex; gap: .55rem; align-items: center; margin-top: 2rem; color: var(--verified); }
   .state-diff div svg { width: 1.1rem; }

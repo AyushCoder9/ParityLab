@@ -1,6 +1,14 @@
 import { expect, test } from "@playwright/test";
 const apiURL = process.env.PARITYLAB_API_URL ?? "http://127.0.0.1:8080";
 
+// This suite exercises the API as an unauthenticated, non-browser caller
+// would — no session cookie, no browser Origin header. The shared project
+// storageState (an authenticated session, used by every other spec file) must
+// not leak in here: a cookie-bearing request without a matching Origin is
+// exactly the CSRF shape the server is right to reject, so inheriting it
+// would make this suite indistinguishable from testing a real CSRF attempt.
+test.use({ storageState: { cookies: [], origins: [] } });
+
 test.describe("public API contract", () => {
   test("health and scenarios are JSON and sandbox scoped", async ({ request }) => {
     const health = await request.get(`${apiURL}/healthz`);

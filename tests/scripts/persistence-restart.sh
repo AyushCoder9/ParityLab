@@ -18,7 +18,9 @@ compose_file="$repo_dir/infra/compose.test.yaml"
 project_name=paritylab-persistence-contract
 api_port=${PARITYLAB_PERSISTENCE_API_PORT:-18081}
 api_origin="http://127.0.0.1:${api_port}"
+web_origin="http://127.0.0.1:3203"
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/paritylab-persistence.XXXXXX")
+cookie_jar="$temp_dir/session.cookies"
 
 cleanup() {
   status=$?
@@ -45,6 +47,18 @@ await_api() {
   done
 }
 
+register() {
+  status=$(curl --silent --show-error --write-out '%{http_code}' --output "$temp_dir/register.json" -c "$cookie_jar" \
+    -H 'Content-Type: application/json' -H "Origin: $web_origin" \
+    --data '{"email":"persistence-contract@example.test","password":"QA_LOG_SENTINEL_NeverLog_42!","workspace_name":"persistence workspace","project_name":"persistence project"}' \
+    "$api_origin/v1/auth/register")
+  if [ "$status" != "201" ]; then
+    cat "$temp_dir/register.json" >&2
+    echo "registration returned HTTP $status" >&2
+    return 1
+  fi
+}
+
 deliver_webhook() {
   output_file=$1
   timestamp=$(date +%s)
@@ -59,7 +73,7 @@ deliver_webhook() {
 
 validate_stripe_connection() {
   status=$(curl --silent --show-error --write-out '%{http_code}' --output "$temp_dir/stripe-connection.json" \
-    -H 'Content-Type: application/json' \
+    -b "$cookie_jar" -H 'Content-Type: application/json' -H "Origin: $web_origin" \
     --data '{"secret_key":"sk_test_paritylab_contract","sandbox_name":"QA Sandbox"}' \
     "$api_origin/v1/connections/stripe/validate")
   if [ "$status" != "201" ]; then
@@ -84,7 +98,7 @@ create_stripe_run() {
   headers_file=$3
   output_file=$4
   status=$(curl --silent --show-error --write-out '%{http_code}' --output "$output_file" -D "$headers_file" \
-    -H 'Content-Type: application/json' \
+    -b "$cookie_jar" -H 'Content-Type: application/json' -H "Origin: $web_origin" \
     -H "Idempotency-Key: ${idempotency_key}" \
     --data "{\"connection_id\":\"${connection_id}\",\"amount_minor\":1099,\"currency\":\"usd\"}" \
     "$api_origin/v1/stripe/payment-intents")
@@ -99,9 +113,10 @@ cd "$repo_dir"
 docker compose -p "$project_name" -f "$compose_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
 PARITYLAB_PERSISTENCE_API_PORT="$api_port" docker compose -p "$project_name" -f "$compose_file" up -d --wait
 await_api
+register
 
 live_key_status=$(curl --silent --output "$temp_dir/stripe-live-key-error.json" --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' \
+  -b "$cookie_jar" -H 'Content-Type: application/json' -H "Origin: $web_origin" \
   --data '{"secret_key":"sk_live_must_never_be_accepted","sandbox_name":"Unsafe"}' \
   "$api_origin/v1/connections/stripe/validate")
 [ "$live_key_status" = "400" ]
@@ -109,7 +124,7 @@ jq -e '.error.code == "sandbox_key_required" and (.error.message | test("live"; 
 
 connection_id=$(validate_stripe_connection)
 invalid_currency_status=$(curl --silent --output "$temp_dir/stripe-invalid-currency.json" --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' \
+  -b "$cookie_jar" -H 'Content-Type: application/json' -H "Origin: $web_origin" \
   -H 'Idempotency-Key: stripe-invalid-currency-contract' \
   --data "{\"connection_id\":\"${connection_id}\",\"amount_minor\":1099,\"currency\":\"USD\"}" \
   "$api_origin/v1/stripe/payment-intents")
@@ -118,17 +133,17 @@ jq -e '.error.code == "invalid_currency"' "$temp_dir/stripe-invalid-currency.jso
 
 create_stripe_run "$connection_id" stripe-payment-restart-contract "$temp_dir/stripe-run-first.headers" "$temp_dir/stripe-run-first.json"
 stripe_run_id=$(jq -er 'select(.environment == "sandbox") | select(.stripe_object_id | startswith("pi_mock_")) | .id' "$temp_dir/stripe-run-first.json")
-curl --fail --silent --show-error "$api_origin/v1/runs/$stripe_run_id/events" >"$temp_dir/stripe-events-first.json"
+curl --fail --silent --show-error -b "$cookie_jar" "$api_origin/v1/runs/$stripe_run_id/events" >"$temp_dir/stripe-events-first.json"
 jq -e '
   [.data[].evidence.paritylab_correlation_id] as $ids |
   ($ids | length) > 0 and ($ids | unique | length) == 1 and
   ($ids[0] | test("^plcorr_[a-f0-9]{24}$"))
 ' "$temp_dir/stripe-events-first.json" >/dev/null
-curl --fail --silent --show-error "$api_origin/v1/runs/$stripe_run_id/report" >"$temp_dir/stripe-report-first.json"
+curl --fail --silent --show-error -b "$cookie_jar" "$api_origin/v1/runs/$stripe_run_id/report" >"$temp_dir/stripe-report-first.json"
 jq -e --arg run_id "$stripe_run_id" '.run.id == $run_id and .state.balanced == true' "$temp_dir/stripe-report-first.json" >/dev/null
 
 curl --fail --silent --show-error -D "$temp_dir/create-first.headers" \
-  -H 'Content-Type: application/json' \
+  -b "$cookie_jar" -H 'Content-Type: application/json' -H "Origin: $web_origin" \
   -H 'Idempotency-Key: persistence-restart-contract' \
   --data '{"scenario_id":"checkout-duplicate","fault":"duplicate"}' \
   "$api_origin/v1/runs" >"$temp_dir/create-first.json"
@@ -141,7 +156,7 @@ docker compose -p "$project_name" -f "$compose_file" stop api-test
 docker compose -p "$project_name" -f "$compose_file" start api-test
 await_api
 
-curl --fail --silent --show-error "$api_origin/v1/runs/$stripe_run_id" >"$temp_dir/stripe-run-after-restart.json"
+curl --fail --silent --show-error -b "$cookie_jar" "$api_origin/v1/runs/$stripe_run_id" >"$temp_dir/stripe-run-after-restart.json"
 jq -e --arg run_id "$stripe_run_id" '.id == $run_id and (.stripe_object_id | startswith("pi_mock_"))' "$temp_dir/stripe-run-after-restart.json" >/dev/null
 create_stripe_run "$connection_id" stripe-payment-restart-contract "$temp_dir/stripe-run-replay.headers" "$temp_dir/stripe-run-replay.json"
 tr -d '\r' <"$temp_dir/stripe-run-replay.headers" | grep -qi '^Idempotent-Replayed: true$'
@@ -151,11 +166,11 @@ jq -e --arg previous_run_id "$stripe_run_id" '
   .id != $previous_run_id and .environment == "sandbox" and (.stripe_object_id | startswith("pi_mock_"))
 ' "$temp_dir/stripe-run-after-restart-new.json" >/dev/null
 
-curl --fail --silent --show-error "$api_origin/v1/runs/$run_id" >"$temp_dir/run-after-restart.json"
+curl --fail --silent --show-error -b "$cookie_jar" "$api_origin/v1/runs/$run_id" >"$temp_dir/run-after-restart.json"
 jq -e --arg run_id "$run_id" '.id == $run_id and .environment == "sandbox"' "$temp_dir/run-after-restart.json" >/dev/null
 
 curl --fail --silent --show-error -D "$temp_dir/create-replay.headers" \
-  -H 'Content-Type: application/json' \
+  -b "$cookie_jar" -H 'Content-Type: application/json' -H "Origin: $web_origin" \
   -H 'Idempotency-Key: persistence-restart-contract' \
   --data '{"scenario_id":"checkout-duplicate","fault":"duplicate"}' \
   "$api_origin/v1/runs" >"$temp_dir/create-replay.json"

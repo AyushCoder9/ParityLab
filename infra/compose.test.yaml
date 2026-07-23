@@ -27,6 +27,8 @@ services:
       PARITYLAB_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
       PARITYLAB_ALLOW_STRIPE_MOCK: "true"
       STRIPE_API_BASE: http://stripe-mock:12111
+      WEB_ORIGIN: "http://127.0.0.1:3203"
+      PARITYLAB_INSECURE_COOKIES: "true"
     ports:
       - "${PARITYLAB_PERSISTENCE_API_PORT:-18081}:8080"
     volumes:

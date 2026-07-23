@@ -59,11 +59,14 @@ services:
       - clickhouse-data:/var/lib/clickhouse
       - ./clickhouse/config.d/paritylab.xml:/etc/clickhouse-server/config.d/paritylab.xml:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      # Use 127.0.0.1, not localhost: musl's resolver in this image tries ::1
+      # first, ClickHouse doesn't listen on the IPv6 loopback, and wget never
+      # falls back to IPv4 — every check failed with "Connection refused"
+      # regardless of how long ClickHouse had been up.
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 90s
+      retries: 20
     restart: unless-stopped
     networks: [paritylab]
 

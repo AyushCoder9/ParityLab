@@ -1,6 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <path d="M4 8h9c3 0 5 2.2 5 5s2 5 5 5h5" stroke="oklch(0.39 0.105 160)" stroke-width="2.4"/>
-  <path d="M4 16h7c3 0 5 2.2 5 5s2 5 5 5h7" stroke="oklch(0.39 0.105 160)" stroke-width="2.4"/>
-  <path d="M4 24h5c3 0 5-2.2 5-5s2-5 5-5h9" stroke="oklch(0.39 0.105 160)" stroke-width="2.4" opacity=".48"/>
-  <circle cx="18" cy="13" r="2.5" fill="oklch(0.39 0.105 160)"/>
+  <style>
+    path, circle { stroke: #0a0a0a; }
+    circle { fill: #0a0a0a; }
+    @media (prefers-color-scheme: dark) {
+      path, circle { stroke: #fafafa; }
+      circle { fill: #fafafa; }
+    }
+  </style>
+  <path d="M4 8h9c3 0 5 2.2 5 5s2 5 5 5h5" stroke-width="2.6"/>
+  <path d="M4 16h7c3 0 5 2.2 5 5s2 5 5 5h7" stroke-width="2.6"/>
+  <path d="M4 24h5c3 0 5-2.2 5-5s2-5 5-5h9" stroke-width="2.6" opacity=".55"/>
+  <circle cx="18" cy="13" r="2.6"/>
 </svg>

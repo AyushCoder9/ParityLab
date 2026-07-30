@@ -1,0 +1,338 @@
+# Instincts generated from https://github.com/AyushCoder9/ParityLab
+# Generated: 2026-07-30T05:25:48.296Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: ParityLab-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/AyushCoder9/ParityLab
+---
+
+# ParityLab Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: build
+
+## Evidence
+
+- 1 commits analyzed
+- Detected conventional commit pattern
+- Examples: build(deps): bump the web group across 1 directory with 6 updates
+
+---
+id: ParityLab-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/AyushCoder9/ParityLab
+---
+
+# ParityLab Commit Length
+
+## Action
+
+Write moderate-length commit messages (~65 characters)
+
+## Evidence
+
+- Average commit message length: 65 chars
+- Based on 1 commits
+
+---
+id: ParityLab-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/AyushCoder9/ParityLab
+---
+
+# ParityLab Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: ParityLab-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/AyushCoder9/ParityLab
+---
+
+# ParityLab Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: ParityLab-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/AyushCoder9/ParityLab
+---
+
+# ParityLab Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: ParityLab-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/AyushCoder9/ParityLab
+---
+
+# ParityLab Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: paritylab-instinct-filename-camelcase
+trigger: "When creating a new file in the repository"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Filename Camelcase
+
+## Action
+
+Name the file using camelCase format
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.files
+
+---
+id: paritylab-instinct-function-camelcase
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Function Camelcase
+
+## Action
+
+Use camelCase for the function name
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.functions
+
+---
+id: paritylab-instinct-class-pascalcase
+trigger: "When declaring a new class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Class Pascalcase
+
+## Action
+
+Use PascalCase for the class name
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.classes
+
+---
+id: paritylab-instinct-constant-screaming-snake
+trigger: "When declaring a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Constant Screaming Snake
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for the constant name
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.constants
+
+---
+id: paritylab-instinct-import-relative
+trigger: "When importing modules within the codebase"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Import Relative
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- Pattern in codeStyle.importStyle
+
+---
+id: paritylab-instinct-export-named
+trigger: "When exporting values from a module"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Export Named
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in codeStyle.exportStyle
+
+---
+id: paritylab-instinct-test-location-separate
+trigger: "When adding or organizing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Test Location Separate
+
+## Action
+
+Place tests in a separate 'tests' directory
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation
+- Presence of 'tests' folder
+
+---
+id: paritylab-instinct-test-e2e-folder
+trigger: "When writing end-to-end tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Test E2e Folder
+
+## Action
+
+Place e2e tests in the 'tests/e2e' directory
+
+## Evidence
+
+- Presence of 'tests/e2e/package.json'
+
+---
+id: paritylab-instinct-commit-conventional-build
+trigger: "When committing dependency or build-related changes"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Commit Conventional Build
+
+## Action
+
+Use the 'build' prefix in the commit message following Conventional Commits format
+
+## Evidence
+
+- Seen in commit: 'build(deps): bump the web group across 1 directory with 6 updates'
+- Pattern in commits.prefixes
+
+---
+id: paritylab-instinct-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Commit Length
+
+## Action
+
+Keep the commit message concise, around 65 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength
+
+---
+id: paritylab-instinct-monorepo-structure
+trigger: "When adding new applications or packages"
+confidence: 0.9
+domain: architecture
+source: repo-analysis
+source_repo: AyushCoder9/ParityLab
+---
+
+# Paritylab Instinct Monorepo Structure
+
+## Action
+
+Place them under 'apps' or 'packages' directories respectively
+
+## Evidence
+
+- Pattern in architecture.folderStructure.commonFolders
+

@@ -10,7 +10,7 @@
     "react": ">=19.0.0"
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
-    "typescript": "^5.9.0"
+    "@types/react": "^19.2.18",
+    "typescript": "^7.0.2"
   }
 }

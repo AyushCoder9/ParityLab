@@ -14,15 +14,15 @@
   "dependencies": {
     "@paritylab/contracts": "workspace:*",
     "@paritylab/ui": "workspace:*",
-    "next": "16.2.11",
-    "react": "19.2.7",
-    "react-dom": "19.2.7",
-    "sharp": "0.35.3"
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sharp": "0.35.4"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "typescript": "^5.9.0"
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "typescript": "^7.0.2"
   }
 }
